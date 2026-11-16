@@ -1,0 +1,9 @@
+Apple Tv 4k 3rdgen Wifi Siri Remote 3rdgen
+By polyman (Ely Haddad), https://sketchfab.com/ely.haddad
+Source: https://sketchfab.com/3d-models/apple-tv-4k-3rdgen-wifi-siri-remote-3rdgen-44ce2c6bdf2846ccbf1157b4f0aa1fa3
+Licensed under Creative Commons Attribution 4.0 International:
+https://creativecommons.org/licenses/by/4.0/
+
+The supplied remote-only USDZ from the reference bundle is included unchanged
+and may differ from the upstream package. sofo supplies its own camera,
+lighting, button overlays and application code.

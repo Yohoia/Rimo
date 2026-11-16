@@ -1,0 +1,43 @@
+# macOS and Xcode
+.DS_Store
+._*
+.build/
+build/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.app
+*.driver/
+*.dSYM/
+*.xcarchive/
+
+# Local tools, reference apps, design exports, and early planning notes
+/.local/
+/reference/
+/icon-exports/
+/.impeccable/
+/docs/architecture/
+/docs/development-plan.md
+
+# Python and diagnostics
+__pycache__/
+*.py[cod]
+.venv/
+*.log
+*.pklg
+*.pcap
+*.pcapng
+*.btsnoop
+*.wav
+
+# Local configuration and signing material
+.env
+.env.*
+!.env.example
+*.local.xcconfig
+*.mobileconfig
+*.mobileprovision
+*.provisionprofile
+*.p12
+*.key
+*.pem
