@@ -1,0 +1,36 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="Rimo / Master / Dock / Light">
+<g id="Purple glass / editable artwork" clip-path="url(#clip0_3_4)">
+<g id="Rimo / purple tile and white remote">
+<path id="Purple-tile" d="M700 100H324C200.288 100 100 200.288 100 324V700C100 823.712 200.288 924 324 924H700C823.712 924 924 823.712 924 700V324C924 200.288 823.712 100 700 100Z" fill="url(#paint0_linear_3_4)"/>
+<path id="Violet-depth" d="M700 100H324C200.288 100 100 200.288 100 324V700C100 823.712 200.288 924 324 924H700C823.712 924 924 823.712 924 700V324C924 200.288 823.712 100 700 100Z" fill="url(#paint1_radial_3_4)"/>
+<path id="Soft-edge" d="M700 104H324C202.497 104 104 202.497 104 324V700C104 821.503 202.497 920 324 920H700C821.503 920 920 821.503 920 700V324C920 202.497 821.503 104 700 104Z" stroke="url(#paint2_linear_3_4)" stroke-width="8"/>
+<path id="Remote-body-ring-and-bar" fill-rule="evenodd" clip-rule="evenodd" d="M458 187H566C588.013 187 609.124 195.745 624.69 211.31C640.255 226.876 649 247.987 649 270V748C649 770.013 640.255 791.124 624.69 806.69C609.124 822.255 588.013 831 566 831H458C435.987 831 414.876 822.255 399.31 806.69C383.745 791.124 375 770.013 375 748V270C375 247.987 383.745 226.876 399.31 211.31C414.876 195.745 435.987 187 458 187ZM512 273C482.561 273 454.328 284.8 433.511 305.804C412.695 326.808 401 355.296 401 385C401 414.704 412.695 443.192 433.511 464.196C454.328 485.2 482.561 497 512 497C541.439 497 569.672 485.2 590.489 464.196C611.305 443.192 623 414.704 623 385C623 355.296 611.305 326.808 590.489 305.804C569.672 284.8 541.439 273 512 273ZM512 310C531.626 310 550.448 317.902 564.326 331.967C578.204 346.032 586 365.109 586 385C586 404.891 578.204 423.968 564.326 438.033C550.448 452.098 531.626 460 512 460C492.374 460 473.552 452.098 459.674 438.033C445.796 423.968 438 404.891 438 385C438 365.109 445.796 346.032 459.674 331.967C473.552 317.902 492.374 310 512 310ZM464 553C459.226 553 454.648 554.896 451.272 558.272C447.896 561.648 446 566.226 446 571C446 575.774 447.896 580.352 451.272 583.728C454.648 587.104 459.226 589 464 589H565C569.774 589 574.352 587.104 577.728 583.728C581.104 580.352 583 575.774 583 571C583 566.226 581.104 561.648 577.728 558.272C574.352 554.896 569.774 553 565 553H464Z" fill="url(#paint3_linear_3_4)"/>
+</g>
+</g>
+</g>
+<defs>
+<linearGradient id="paint0_linear_3_4" x1="100" y1="100" x2="924" y2="924" gradientUnits="userSpaceOnUse">
+<stop stop-color="#DCA3FB"/>
+<stop offset="0.42" stop-color="#9746FF"/>
+<stop offset="1" stop-color="#802BFA"/>
+</linearGradient>
+<radialGradient id="paint1_radial_3_4" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(512 841.6) scale(576.8)">
+<stop stop-color="#4010C8" stop-opacity="0.75"/>
+<stop offset="1" stop-color="#7323F0" stop-opacity="0"/>
+</radialGradient>
+<linearGradient id="paint2_linear_3_4" x1="104" y1="104" x2="716" y2="920" gradientUnits="userSpaceOnUse">
+<stop stop-color="#F5D4FF" stop-opacity="0.8"/>
+<stop offset="0.45" stop-color="#BD77FF" stop-opacity="0"/>
+<stop offset="1" stop-color="#A34BFF" stop-opacity="0.7"/>
+</linearGradient>
+<linearGradient id="paint3_linear_3_4" x1="375" y1="187" x2="772.312" y2="525.086" gradientUnits="userSpaceOnUse">
+<stop stop-color="white"/>
+<stop offset="0.5" stop-color="#F4EDFF"/>
+<stop offset="1" stop-color="#DEC7FC"/>
+</linearGradient>
+<clipPath id="clip0_3_4">
+<rect width="1024" height="1024" fill="white"/>
+</clipPath>
+</defs>
+</svg>

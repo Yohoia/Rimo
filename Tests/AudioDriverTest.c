@@ -1,10 +1,10 @@
 // Exercise the exact plug-in implementation without installing into CoreAudio.
-#include "../sofo/AudioDriver/SofoMicrophone.c"
+#include "../Rimo/AudioDriver/RimoMicrophone.c"
 #include <assert.h>
 #include <stdio.h>
 
 int main(void) {
-    assert(SofoMicrophoneFactory(NULL, kAudioServerPlugInTypeUUID) == driver);
+    assert(RimoMicrophoneFactory(NULL, kAudioServerPlugInTypeUUID) == driver);
     assert(initialize(driver, NULL) == noErr);
     // All advertised properties must have consistent sizes and successful getters.
     const AudioObjectPropertySelector common[] = {kAudioObjectPropertyClass, kAudioObjectPropertyBaseClass,

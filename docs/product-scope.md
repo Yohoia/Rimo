@@ -1,6 +1,6 @@
-# sofo：功能范围与已知限制
+# Rimo：功能范围与已知限制
 
-sofo 将 Apple TV Siri Remote 作为 Mac 的输入设备使用。目前以 **A2540** 为首要实测机型，配对由 macOS 系统蓝牙设置负责。
+Rimo 将 Apple TV Siri Remote 作为 Mac 的输入设备使用。目前以 **A2540** 为首要实测机型，配对由 macOS 系统蓝牙设置负责。
 
 | 功能 | 当前实现与限制 |
 | --- | --- |
@@ -11,6 +11,6 @@ sofo 将 Apple TV Siri Remote 作为 Mac 的输入设备使用。目前以 **A25
 | 输入监听 | 目前使用被动监听；无法保证拦截 macOS 原按键动作。设置窗口在前台或录制时不发送映射。其他遥控器机型尚未验证。 |
 | 电量 | 优先读取 macOS 配件电源信息，失败时回退到 HID。无法可靠区分设备或读不到电量时显示「电量未知」。 |
 | 遥控器收音 | 实验功能。A2540 已通过 PacketLogger 路径完成采集、Opus 解码与本地回放；需要额外的 Apple 工具及本机授权。 |
-| 虚拟麦克风 | 提供可选的 macOS 音频驱动，可安装为「sofo Remote Microphone」。驱动和实时音频桥接仍需更多真机验证。 |
+| 虚拟麦克风 | 提供可选的 macOS 音频驱动，可安装为「Rimo Remote Microphone」。驱动和实时音频桥接仍需更多真机验证。 |
 
-应用设置和录音保存在本机。构建、配对、权限和实验性收音的说明见 [README](../README.md)；设备诊断见 [A2540 收音原型](../sofo/Input/VoicePrototype/README.md)。
+应用设置和录音保存在本机。构建、配对、权限和实验性收音的说明见 [README](../README.md)；设备诊断见 [A2540 收音原型](../Rimo/Input/VoicePrototype/README.md)。

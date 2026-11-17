@@ -2,12 +2,12 @@
 set -euo pipefail
 
 project_dir=$(cd -- "$(dirname -- "$0")/.." && pwd)
-if [[ -n ${SOFO_PACKETLOGGER_APP:-} ]]; then
-    if [[ ! -x "$SOFO_PACKETLOGGER_APP/Contents/Resources/packetlogger" ]]; then
-        echo 'error: SOFO_PACKETLOGGER_APP must point to a PacketLogger.app that contains the command-line tool.' >&2
+if [[ -n ${RIMO_PACKETLOGGER_APP:-} ]]; then
+    if [[ ! -x "$RIMO_PACKETLOGGER_APP/Contents/Resources/packetlogger" ]]; then
+        echo 'error: RIMO_PACKETLOGGER_APP must point to a PacketLogger.app that contains the command-line tool.' >&2
         exit 2
     fi
-    printf '%s\n' "$SOFO_PACKETLOGGER_APP"
+    printf '%s\n' "$RIMO_PACKETLOGGER_APP"
     exit 0
 fi
 

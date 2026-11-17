@@ -13,10 +13,10 @@ else
     status=$?
     if [[ $status -ne 1 ]]; then exit "$status"; fi
     /bin/rm -rf -- "$packaged_app"
-    echo 'note: PacketLogger not found; building sofo without Bluetooth voice capture.'
+    echo 'note: PacketLogger not found; building Rimo without Bluetooth voice capture.'
 fi
-/bin/cp "$SRCROOT/sofo/Resources/capture-voice.sh" "$resource_dir/capture-voice.sh"
-/bin/cp "$SRCROOT/sofo/Resources/Opus-LICENSE.txt" "$resource_dir/Opus-LICENSE.txt"
+/bin/cp "$SRCROOT/Rimo/Resources/capture-voice.sh" "$resource_dir/capture-voice.sh"
+/bin/cp "$SRCROOT/Rimo/Resources/Opus-LICENSE.txt" "$resource_dir/Opus-LICENSE.txt"
 
 /bin/bash "$SRCROOT/scripts/build-audio-driver.sh" "$resource_dir"
-/bin/cp "$SRCROOT/sofo/Resources/install-microphone.sh" "$resource_dir/install-microphone.sh"
+/bin/cp "$SRCROOT/Rimo/Resources/install-microphone.sh" "$resource_dir/install-microphone.sh"

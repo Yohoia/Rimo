@@ -1,6 +1,6 @@
-# sofo 设备界面
+# Rimo 设备界面
 
-本文记录当前 macOS 主应用的设备首页和详情页。共享颜色和控件样式以 [`SofoStyle`](../sofo/Settings/SettingsView.swift) 为准，设备布局、投影和命中区域分别由 [`MappingView`](../sofo/Mapping/MappingView.swift) 和 [`RemoteModelView`](../sofo/Mapping/RemoteModelView.swift) 实现。
+本文记录当前 macOS 主应用的设备首页和详情页。共享颜色和控件样式以 [`RimoStyle`](../Rimo/Settings/SettingsView.swift) 为准，设备布局、投影和命中区域分别由 [`MappingView`](../Rimo/Mapping/MappingView.swift) 和 [`RemoteModelView`](../Rimo/Mapping/RemoteModelView.swift) 实现。
 
 ## 首页与详情
 
@@ -13,7 +13,7 @@
 
 侧栏贴窗口右侧、占窗口宽度三分之一并填满高度。灰色「动作」标题栏里的菜单切换单击、双击和长按；下方是通栏搜索、推荐动作和可折叠的分类。当前动作使用带圆点的实色行，已有但不在推荐列表的动作会置于该列表顶部，便于重新编辑。需配置参数的动作在侧栏内打开，点「动作列表」返回。
 
-侧栏布局参考 Logi Options+ 主应用；sofo 保留自己的遥控器模型、推近动效和触发方式。参考行为和适配方式见 [Options+ 对照记录](optionsplus-main-findings.md)。
+侧栏布局参考 Logi Options+ 主应用；Rimo 保留自己的遥控器模型、推近动效和触发方式。参考行为和适配方式见 [Options+ 对照记录](optionsplus-main-findings.md)。
 
 ## 回归检查
 

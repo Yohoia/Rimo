@@ -16,7 +16,7 @@ int main(int argc, char **argv) {
  assert((*d)->GetPropertyData(d,1,0,&a,0,NULL,size,&actual,&device)==noErr && device==2);
  a.mSelector=kAudioDevicePropertyDeviceUID;CFStringRef uid=NULL;size=sizeof(uid);
  assert((*d)->GetPropertyData(d,device,0,&a,0,NULL,size,&actual,&uid)==noErr);
- assert(CFEqual(uid,CFSTR("cn.yohoia.sofo.microphone")));CFRelease(uid);
+ assert(CFEqual(uid,CFSTR("cn.yohoia.rimo.microphone")));CFRelease(uid);
  CFRelease(factories);CFRelease(plugin);CFRelease(url);
  puts("PASS: signed driver bundle loaded through CFPlugIn; factory; device list; microphone UID");
 }
