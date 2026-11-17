@@ -12,6 +12,9 @@ struct RimoApp: App {
         } label: {
             Image("MenuBarIcon")
                 .renderingMode(.template)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 18, height: 18)
                 .accessibilityLabel("Rimo")
         }
     }

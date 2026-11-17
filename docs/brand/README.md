@@ -8,7 +8,7 @@
 - [单色标志 SVG](Rimo-symbol.svg)：遥控器轮廓和圆环、短横线留空，供页面和菜单栏使用。
 - [Rimo 字标 SVG](Rimo-wordmark.svg)与[组合标志 SVG](Rimo-lockup.svg)：直接从 Figma 新版母版导出。
 
-应用图标的 16、32、64、128、256、512、1024 px PNG 已同步到 Xcode Asset Catalog。菜单栏使用透明模板图标。
+应用图标的 16、32、64、128、256、512、1024 px PNG 已同步到 Xcode Asset Catalog。菜单栏使用 18 pt 透明模板图标，提供 18 px @1x 与 36 px @2x 资源。首页左上角显示「欢迎回来」，不展示 Logo。
 
 本地完整导出包位于 `icon-exports/Rimo-logo-export.zip`，包含 SVG 母版、透明 PNG、菜单栏模板和 `Rimo.icns`。SVG 与 PNG 均已移除 Figma 导出的页面底色；Dock 保留 100 px 透明留边。
 
