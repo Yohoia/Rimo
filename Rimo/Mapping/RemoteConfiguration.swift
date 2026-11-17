@@ -17,6 +17,10 @@ enum RemoteAction: Codable, Equatable {
     case openApp(AppTarget)
     case text(TextAction)
 
+    func isAssignable(to button: RemoteButton) -> Bool {
+        self != .system(.toggleScrollMode) || ScrollAction.Direction(button: button) == nil
+    }
+
     var title: String {
         switch self {
         case .keyboard(let key): key.title
@@ -47,6 +51,17 @@ enum MouseAction: String, Codable, CaseIterable, Identifiable {
 struct ScrollAction: Codable, Equatable {
     enum Direction: String, Codable, CaseIterable, Identifiable {
         case up, down, left, right
+
+        init?(button: RemoteButton) {
+            switch button {
+            case .up: self = .up
+            case .down: self = .down
+            case .left: self = .left
+            case .right: self = .right
+            default: return nil
+            }
+        }
+
         var id: Self { self }
         var title: String {
             switch self {
@@ -97,19 +112,21 @@ enum MediaAction: String, Codable, CaseIterable, Identifiable {
 }
 
 enum SystemAction: String, Codable, CaseIterable, Identifiable {
+    case toggleScrollMode
     case missionControl, appWindows, previousDesktop, nextDesktop, showDesktop, lockScreen, sleepDisplay
     case copy, cut, paste, undo, redo, selectAll, find, back, forward
     case newTab, previousTab, nextTab, zoomIn, zoomOut, resetZoom, captureScreen, screenshotTools, emoji
 
     // Each action belongs to one browse category; recommendations may surface it again.
     static let windowActions: [Self] = [.missionControl, .appWindows, .showDesktop, .previousDesktop, .nextDesktop]
-    static let screenActions: [Self] = [.lockScreen, .sleepDisplay]
-    static let otherActions: [Self] = [.copy, .cut, .paste, .undo, .redo, .selectAll, .find,
-        .back, .forward, .newTab, .previousTab, .nextTab, .zoomIn, .zoomOut, .resetZoom,
-        .captureScreen, .screenshotTools, .emoji]
+    static let screenActions: [Self] = [.lockScreen, .sleepDisplay, .captureScreen, .screenshotTools, .emoji]
+    static let editingActions: [Self] = [.copy, .cut, .paste, .undo, .redo, .selectAll, .find]
+    static let otherActions: [Self] = [.toggleScrollMode, .back, .forward, .newTab, .previousTab,
+        .nextTab, .zoomIn, .zoomOut, .resetZoom]
     var id: Self { self }
     var title: String {
         switch self {
+        case .toggleScrollMode: "滚动模式"
         case .missionControl: "调度中心"
         case .appWindows: "当前 App 的全部窗口"
         case .previousDesktop: "上一个桌面"
@@ -147,7 +164,7 @@ enum SystemAction: String, Codable, CaseIterable, Identifiable {
         case .nextDesktop: (key, flags) = (kVK_RightArrow, .control)
         case .showDesktop: (key, flags) = (kVK_F11, [])
         case .lockScreen: (key, flags) = (kVK_ANSI_Q, [.control, .command])
-        case .sleepDisplay: return nil
+        case .sleepDisplay, .toggleScrollMode: return nil
         case .copy: (key, flags) = (kVK_ANSI_C, .command)
         case .cut: (key, flags) = (kVK_ANSI_X, .command)
         case .paste: (key, flags) = (kVK_ANSI_V, .command)
@@ -168,6 +185,18 @@ enum SystemAction: String, Codable, CaseIterable, Identifiable {
         case .emoji: (key, flags) = (kVK_Space, [.control, .command])
         }
         return KeyboardShortcut(option: .init(id: UInt16(key), title: title), flags: flags)
+    }
+}
+
+struct RemoteScrollMode {
+    private(set) var enabled = false
+
+    mutating func toggle() { enabled.toggle() }
+    mutating func reset() { enabled = false }
+
+    func scroll(for button: RemoteButton) -> ScrollAction? {
+        guard enabled, let direction = ScrollAction.Direction(button: button) else { return nil }
+        return .init(direction: direction)
     }
 }
 
@@ -325,7 +354,9 @@ struct RemoteConfiguration: Codable, Equatable {
 
     func action(for button: RemoteButton, trigger: RemoteTrigger = .single, in appID: String?) -> RemoteAction? {
         let buttons = scene(for: appID)?.source(for: button, trigger: trigger, global: global) ?? global
-        return buttons.isEnabled(button, trigger: trigger) ? buttons[button, trigger] : nil
+        guard buttons.isEnabled(button, trigger: trigger),
+              let action = buttons[button, trigger], action.isAssignable(to: button) else { return nil }
+        return action
     }
 
     mutating func apply(_ preset: ScenePreset, to id: String, name: String) {

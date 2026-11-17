@@ -33,19 +33,60 @@ struct RemoteConfigurationTest {
         try verifyTriggerMappings(single: globalAction, additional: sceneAction)
         try verifyExpandedActions()
         verifyKeyboardCatalog()
+        try verifyScrollMode()
         try verifyOtherActions()
         verifyRemotePresses()
-        print("Scenes, mapping persistence, HID de-duplication and trigger recognition passed.")
+        print("Scenes, mapping persistence, scroll mode, HID de-duplication and trigger recognition passed.")
+    }
+
+    static func verifyScrollMode() throws {
+        let toggle = RemoteAction.system(.toggleScrollMode)
+        let directions: [(RemoteButton, ScrollAction.Direction)] = [
+            (.up, .up), (.down, .down), (.left, .left), (.right, .right)
+        ]
+        var mode = RemoteScrollMode()
+        precondition(directions.allSatisfy { mode.scroll(for: $0.0) == nil })
+        mode.toggle()
+        for (button, direction) in directions {
+            precondition(mode.scroll(for: button)?.direction == direction && !toggle.isAssignable(to: button))
+        }
+        let ordinaryButtons = RemoteButton.allCases.filter { button in !directions.contains { $0.0 == button } }
+        precondition(ordinaryButtons.allSatisfy { mode.scroll(for: $0) == nil && toggle.isAssignable(to: $0) })
+        mode.toggle()
+        precondition(!mode.enabled && mode.scroll(for: .down) == nil)
+
+        // Old files may contain a direction-key binding. Keep it editable but never dispatch it.
+        let appID = "sample.reader"
+        let legacyScroll = RemoteAction.scroll(.init(direction: .left))
+        var configuration = RemoteConfiguration()
+        var sceneButtons = ButtonMappings()
+        for trigger in RemoteTrigger.allCases {
+            configuration.global[.up, trigger] = toggle
+            sceneButtons[.down, trigger] = toggle
+        }
+        configuration.global[.left] = legacyScroll
+        configuration.global[.mute, .hold] = toggle
+        configuration.scenes = [.init(id: appID, name: "Reader", buttons: sceneButtons)]
+        configuration.automatic = true
+        let restored = try JSONDecoder().decode(RemoteConfiguration.self, from: JSONEncoder().encode(configuration))
+        for trigger in RemoteTrigger.allCases {
+            precondition(restored.global[.up, trigger] == toggle)
+            precondition(restored.action(for: .up, trigger: trigger, in: nil) == nil)
+            precondition(restored.action(for: .down, trigger: trigger, in: appID) == nil)
+        }
+        precondition(restored.action(for: .mute, trigger: .hold, in: nil) == toggle)
+        precondition(restored.action(for: .left, in: nil) == legacyScroll)
     }
 
     static func verifyOtherActions() throws {
-        let categories = SystemAction.windowActions + SystemAction.screenActions + SystemAction.otherActions
+        let categories = SystemAction.windowActions + SystemAction.screenActions + SystemAction.editingActions + SystemAction.otherActions
         precondition(Set(categories).count == categories.count)
         precondition(Set(categories) == Set(SystemAction.allCases))
         var signatures: Set<String> = []
         for action in SystemAction.otherActions {
-            let key = action.shortcut!
-            precondition(signatures.insert("\(key.keyCode):\(key.modifiers)").inserted)
+            if let key = action.shortcut {
+                precondition(signatures.insert("\(key.keyCode):\(key.modifiers)").inserted)
+            } else { precondition(action == .toggleScrollMode) }
             let value = RemoteAction.system(action)
             let restored = try JSONDecoder().decode(RemoteAction.self, from: JSONEncoder().encode(value))
             precondition(restored == value)
@@ -63,7 +104,7 @@ struct RemoteConfigurationTest {
         precondition(Set(grouped.map(\.id)) == Set(keys.map(\.id)))
         for code in [kVK_Function, kVK_Command, kVK_RightCommand, kVK_Option, kVK_RightOption,
                      kVK_Control, kVK_RightControl, kVK_Shift, kVK_RightShift, kVK_CapsLock,
-                     kVK_Return, kVK_Escape, kVK_ForwardDelete, kVK_F13, kVK_F20] {
+                     kVK_Return, kVK_Escape, kVK_ForwardDelete] {
             let option = keys.first { $0.id == UInt16(code) }!
             let shortcut = KeyboardShortcut(option: option, flags: [])
             precondition(shortcut.keyCode == UInt16(code) && shortcut.modifiers == 0)
@@ -71,7 +112,7 @@ struct RemoteConfigurationTest {
                 precondition(shortcut.outputModifierCodes.isEmpty)
             }
         }
-        precondition(!keys.contains { [UInt16(kVK_ANSI_A), UInt16(kVK_ANSI_0), UInt16(kVK_ANSI_Keypad0)].contains($0.id) })
+        precondition(!keys.contains { [UInt16(kVK_ANSI_A), UInt16(kVK_ANSI_0), UInt16(kVK_ANSI_Keypad0), UInt16(kVK_F1), UInt16(kVK_F20)].contains($0.id) })
     }
 
     static func verifyPresets(globalAction: RemoteAction, otherAction: RemoteAction) throws {

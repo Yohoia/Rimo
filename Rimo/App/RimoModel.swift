@@ -16,6 +16,7 @@ final class RimoModel: ObservableObject {
     @Published private(set) var configurationError: String?
     @Published private(set) var actionError: String?
     @Published private(set) var paused = false
+    @Published private(set) var scrollMode = RemoteScrollMode()
     @Published private(set) var recording: RemoteButton?
     @Published private(set) var configuration = RemoteConfiguration()
     @Published private(set) var frontmostApp = NSWorkspace.shared.frontmostApplication
@@ -85,6 +86,7 @@ final class RimoModel: ObservableObject {
             self?.status = status
             if status != .connected {
                 self?.cancelPendingPresses()
+                self?.scrollMode.reset()
                 self?.lastButton = nil
                 self?.diagnostic = nil
                 self?.buttonReport = nil
@@ -94,7 +96,10 @@ final class RimoModel: ObservableObject {
         hid.onDiagnostic = { [weak self] message in self?.diagnostic = message }
         hid.onButtonReport = { [weak self] report in self?.buttonReport = report }
         hid.onButton = { [weak self] button, edge in self?.handle(button, edge: edge) }
-        hid.onDeviceRemoved = { [weak self] in self?.cancelPendingPresses() }
+        hid.onDeviceRemoved = { [weak self] in
+            self?.cancelPendingPresses()
+            self?.scrollMode.reset()
+        }
         voiceChanges = voice.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         refresh()
         connectionTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
@@ -172,7 +177,8 @@ final class RimoModel: ObservableObject {
     @discardableResult
     func setAction(_ action: RemoteAction?, for button: RemoteButton, trigger: RemoteTrigger = .single,
                    sceneID: String? = nil) -> Bool {
-        updateMappings(button, trigger: trigger, sceneID: sceneID) { $0[button, trigger] = action }
+        guard action?.isAssignable(to: button) != false else { return false }
+        return updateMappings(button, trigger: trigger, sceneID: sceneID) { $0[button, trigger] = action }
     }
 
     func setActionEnabled(_ enabled: Bool, for button: RemoteButton, trigger: RemoteTrigger = .single, sceneID: String? = nil) {
@@ -275,7 +281,13 @@ final class RimoModel: ObservableObject {
 
     func togglePaused() {
         paused.toggle()
+        scrollMode.reset()
         cancelPendingPresses()
+    }
+
+    func toggleScrollMode() {
+        cancelPendingPresses()
+        scrollMode.toggle()
     }
 
     func startRecording(_ button: RemoteButton) {
@@ -300,6 +312,11 @@ final class RimoModel: ObservableObject {
         var press = pendingPresses.removeValue(forKey: button)
         press?.timer?.cancel()
         guard canDispatch(button) else { return }
+        if let scroll = scrollMode.scroll(for: button) {
+            if edge == .pressed { dispatch(.scroll(scroll)) }
+            return
+        }
+
         if press?.appPID != app?.processIdentifier { press = nil }
 
         if press == nil {
@@ -322,7 +339,10 @@ final class RimoModel: ObservableObject {
         }
         guard var press else { return }
         for trigger in press.sequence.receive(edge, at: ProcessInfo.processInfo.systemUptime) {
-            if let action = press.actions[trigger] { dispatch(action, heldBy: edge == .pressed ? button : nil) }
+            if let action = press.actions[trigger] {
+                dispatch(action, heldBy: edge == .pressed ? button : nil)
+                if action == .system(.toggleScrollMode) { return }
+            }
         }
         track(press, for: button)
     }
@@ -345,7 +365,10 @@ final class RimoModel: ObservableObject {
         guard var press = pendingPresses.removeValue(forKey: button), canDispatch(button),
               press.appPID == NSWorkspace.shared.frontmostApplication?.processIdentifier else { return }
         if let trigger = press.sequence.advance(to: ProcessInfo.processInfo.systemUptime),
-           let action = press.actions[trigger] { dispatch(action, heldBy: trigger == .hold ? button : nil) }
+           let action = press.actions[trigger] {
+            dispatch(action, heldBy: trigger == .hold ? button : nil)
+            if action == .system(.toggleScrollMode) { return }
+        }
         track(press, for: button)
     }
 
@@ -362,6 +385,10 @@ final class RimoModel: ObservableObject {
 
     private func dispatch(_ action: RemoteAction, heldBy button: RemoteButton? = nil) {
         actionError = nil
+        if action == .system(.toggleScrollMode) {
+            toggleScrollMode()
+            return
+        }
         if case .shortcut(let shortcut) = action {
             runShortcut(shortcut)
             return

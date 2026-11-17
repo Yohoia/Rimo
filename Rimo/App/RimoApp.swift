@@ -27,6 +27,7 @@ private struct RimoMenu: View {
     var body: some View {
         Text(model.statusTitle)
         Button("打开按键设置…", action: openSettings)
+        Toggle("滚动模式", isOn: Binding(get: { model.scrollMode.enabled }, set: { _ in model.toggleScrollMode() }))
         Button(model.paused ? "恢复映射" : "暂停映射") { model.togglePaused() }
         Divider()
         Text(model.voice.state.title)

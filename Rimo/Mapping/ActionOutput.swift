@@ -43,6 +43,7 @@ enum ActionOutput {
                     .cgEvent?.post(tap: .cghidEventTap)
             }
         case .system(let system):
+            guard system != .toggleScrollMode else { return }
             if let key = system.shortcut {
                 guard key.post() else { throw OutputError.message("无法发送系统操作。") }
             } else {

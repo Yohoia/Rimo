@@ -57,8 +57,7 @@ struct KeyboardShortcut: Codable, Equatable {
     static let navigationKeys = [
         kVK_Return, kVK_Space, kVK_Escape, kVK_Tab, kVK_Delete, kVK_ForwardDelete,
         kVK_UpArrow, kVK_DownArrow, kVK_LeftArrow, kVK_RightArrow,
-        kVK_Home, kVK_End, kVK_PageUp, kVK_PageDown, kVK_ANSI_KeypadEnter,
-        kVK_F1, kVK_F2, kVK_F3, kVK_F4, kVK_F5, kVK_F6, kVK_F7, kVK_F8, kVK_F9, kVK_F10, kVK_F11, kVK_F12,
+        kVK_Home, kVK_End, kVK_PageUp, kVK_PageDown,
         kVK_Command, kVK_RightCommand, kVK_Option, kVK_RightOption, kVK_Control, kVK_RightControl, kVK_Shift, kVK_RightShift, kVK_Function
     ].map { Option(id: UInt16($0), title: specialKeys[$0]!) } + additionalKeys
 
@@ -68,14 +67,7 @@ struct KeyboardShortcut: Codable, Equatable {
         var id: String { title }
     }
 
-    private static let functionKeys = [kVK_F1, kVK_F2, kVK_F3, kVK_F4, kVK_F5,
-        kVK_F6, kVK_F7, kVK_F8, kVK_F9, kVK_F10, kVK_F11, kVK_F12, kVK_F13,
-        kVK_F14, kVK_F15, kVK_F16, kVK_F17, kVK_F18, kVK_F19, kVK_F20]
-        .enumerated().map { Option(id: UInt16($0.element), title: "F\($0.offset + 1)") }
-
-    private static let additionalKeys = Array(functionKeys.dropFirst(12))
-        + [Option(id: UInt16(kVK_CapsLock), title: "Caps Lock"),
-           Option(id: UInt16(kVK_Help), title: "Help / 帮助")]
+    private static let additionalKeys = [Option(id: UInt16(kVK_CapsLock), title: "Caps Lock")]
 
     static let keyGroups: [KeyGroup] = {
         func options(_ codes: [Int]) -> [Option] {
@@ -83,13 +75,12 @@ struct KeyboardShortcut: Codable, Equatable {
         }
         return [
             .init(title: "常用按键", keys: options([kVK_Return, kVK_Escape, kVK_Space, kVK_Tab,
-                kVK_Delete, kVK_ForwardDelete, kVK_ANSI_KeypadEnter])),
+                kVK_Delete, kVK_ForwardDelete])),
             .init(title: "修饰键", keys: options([kVK_Function, kVK_Command, kVK_RightCommand,
                 kVK_Option, kVK_RightOption, kVK_Control, kVK_RightControl, kVK_Shift,
                 kVK_RightShift, kVK_CapsLock])),
             .init(title: "方向与导航", keys: options([kVK_UpArrow, kVK_DownArrow, kVK_LeftArrow,
-                kVK_RightArrow, kVK_Home, kVK_End, kVK_PageUp, kVK_PageDown, kVK_Help])),
-            .init(title: "功能键", keys: functionKeys)
+                kVK_RightArrow, kVK_Home, kVK_End, kVK_PageUp, kVK_PageDown]))
         ]
     }()
 

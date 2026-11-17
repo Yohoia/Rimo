@@ -486,7 +486,7 @@ struct ButtonMappingEditor: View {
                 if groups.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("没有符合的动作").font(RimoStyle.title)
-                        hint("试试「快捷键」「滚动」或「播放」。")
+                        hint("试试「自定义」「滚动」或「播放」。")
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(34)
@@ -510,7 +510,7 @@ struct ButtonMappingEditor: View {
                                 VStack(spacing: 0) {
                                     if group == .keyboard && !searching {
                                         actionRow(.configure(.keyboard))
-                                        actionRow(.configure(.text))
+                                        ForEach(SystemAction.editingActions) { actionRow(.system($0)) }
                                         ForEach(KeyboardShortcut.keyGroups) { section in
                                             Text(section.title)
                                                 .font(.system(size: 12, weight: .medium))
@@ -616,7 +616,8 @@ struct ButtonMappingEditor: View {
     }
 
     private func actionRow(_ choice: ActionChoice) -> some View {
-        let current = action.map(choice.represents) ?? false
+        let restriction = assignmentRestriction(for: choice.action)
+        let current = restriction == nil && (action.map(choice.represents) ?? false)
         return Button {
             searchingActions = false
             kind.wrappedValue = choice.kind
@@ -633,17 +634,34 @@ struct ButtonMappingEditor: View {
                     }
                     .frame(width: 18, height: 18)
                     .accessibilityHidden(true)
-                Text(choice.title)
-                    .font(.system(size: 14, weight: current ? .semibold : .regular))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(choice.title)
+                        .font(.system(size: 14, weight: current ? .semibold : .regular))
+                    if let restriction {
+                        Text(restriction)
+                            .font(RimoStyle.label)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
                 Spacer(minLength: 0)
+                if restriction != nil {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 14))
+                        .accessibilityHidden(true)
+                }
             }
-            .foregroundStyle(current ? RimoStyle.assignmentInk : RimoStyle.ink)
+            .foregroundStyle(restriction != nil ? RimoStyle.muted : current ? RimoStyle.assignmentInk : RimoStyle.ink)
             .padding(.horizontal, 16)
-            .frame(minHeight: current ? 48 : 37)
+            .frame(minHeight: current || restriction != nil ? 48 : 37)
         }
         .buttonStyle(ActionBrowserRowStyle(current: current))
         .padding(.bottom, current ? 6 : 0)
+        .disabled(restriction != nil)
         .accessibilityAddTraits(current ? .isSelected : [])
+    }
+
+    private func assignmentRestriction(for action: RemoteAction?) -> String? {
+        action?.isAssignable(to: button) == false ? "仅可分配给非方向键" : nil
     }
 
     private func groupChoices(_ group: ActionGroup) -> [ActionChoice] {
@@ -651,18 +669,18 @@ struct ButtonMappingEditor: View {
         case .recommended:
             let suggested: [ActionChoice] = switch button {
             case .playPause: [.media(.playPause), .key(UInt16(kVK_Space)), .media(.nextTrack)]
-            case .volumeUp: [.media(.volumeUp), .scroll(.up)]
-            case .volumeDown: [.media(.volumeDown), .scroll(.down)]
+            case .volumeUp: [.media(.volumeUp), .system(.toggleScrollMode)]
+            case .volumeDown: [.media(.volumeDown), .system(.toggleScrollMode)]
             case .mute: [.media(.mute), .media(.playPause)]
             case .home: [.system(.missionControl), .system(.showDesktop), .configure(.openApp)]
             case .select: [.key(UInt16(kVK_Return)), .key(UInt16(kVK_Space))]
-            case .up: [.key(UInt16(kVK_UpArrow)), .scroll(.up), .key(UInt16(kVK_PageUp))]
-            case .down: [.key(UInt16(kVK_DownArrow)), .scroll(.down), .key(UInt16(kVK_PageDown))]
+            case .up: [.key(UInt16(kVK_UpArrow)), .key(UInt16(kVK_PageUp))]
+            case .down: [.key(UInt16(kVK_DownArrow)), .key(UInt16(kVK_PageDown))]
             case .left: [.key(UInt16(kVK_LeftArrow)), .system(.previousDesktop), .media(.previousTrack)]
             case .right: [.key(UInt16(kVK_RightArrow)), .system(.nextDesktop), .media(.nextTrack)]
             case .back, .menu: [.key(UInt16(kVK_Escape)), .system(.showDesktop)]
             case .power: [.system(.sleepDisplay), .system(.lockScreen)]
-            case .siri: [.configure(.keyboard), .configure(.shortcut), .configure(.text)]
+            case .siri: [.configure(.keyboard), .configure(.shortcut), .system(.toggleScrollMode)]
             }
             var result = suggested
             if !result.contains(.configure(.keyboard)) { result.append(.configure(.keyboard)) }
@@ -673,8 +691,8 @@ struct ButtonMappingEditor: View {
             }
             return result
         case .keyboard:
-            return [.configure(.keyboard), .configure(.text)] + ActionChoice.presetKeyCodes.map(ActionChoice.key)
-        case .scroll: return ScrollAction.Direction.allCases.map(ActionChoice.scroll)
+            return [.configure(.keyboard)] + SystemAction.editingActions.map(ActionChoice.system)
+                + ActionChoice.presetKeyCodes.map(ActionChoice.key)
         case .media: return MediaAction.allCases.map(ActionChoice.media)
         case .windows:
             return SystemAction.windowActions.map(ActionChoice.system)
@@ -731,7 +749,7 @@ struct ButtonMappingEditor: View {
                         .foregroundStyle(RimoStyle.muted)
                     Spacer()
                     Picker("按键动作", selection: kind) {
-                        ForEach(EditorKind.allCases.filter { $0 != .mouse || kind.wrappedValue == .mouse }) { Text($0.title).tag($0) }
+                        ForEach(EditorKind.allCases.filter { ![.mouse, .scroll, .text].contains($0) || kind.wrappedValue == $0 }) { Text($0.title).tag($0) }
                     }
                     .labelsHidden()
                     .controlSize(.regular)
@@ -933,6 +951,7 @@ struct ButtonMappingEditor: View {
 
     private var systemChoices: [SystemAction] {
         guard inSidebar, case .system(let current) = action else { return SystemAction.allCases }
+        if SystemAction.editingActions.contains(current) { return SystemAction.editingActions }
         if SystemAction.otherActions.contains(current) { return SystemAction.otherActions }
         if SystemAction.windowActions.contains(current) { return SystemAction.windowActions }
         return SystemAction.screenActions
@@ -982,12 +1001,28 @@ struct ButtonMappingEditor: View {
                 if case .system(let value) = action { return Optional(value) }; return nil
             }, set: { if let value = $0 { save(.system(value)) } })) {
                 Text("选择系统操作").tag(nil as SystemAction?)
-                ForEach(systemChoices) { Text($0.title).tag(Optional($0)) }
+                ForEach(systemChoices) { item in
+                    Group {
+                        if let restriction = assignmentRestriction(for: .system(item)) {
+                            Label("\(item.title)（\(restriction)）", systemImage: "exclamationmark.triangle")
+                                .disabled(true)
+                        } else {
+                            Text(item.title)
+                        }
+                    }
+                    .tag(Optional(item))
+                }
             }
             .labelsHidden()
-            hint(SystemAction.otherActions.contains { action == .system($0) }
-                 ? "使用 macOS 常用快捷键，作用于前台 App；应用需支持对应操作。截屏与表情使用系统快捷键。"
-                 : "窗口和桌面操作使用 macOS 默认快捷键，请保持系统快捷键已启用。")
+            if let restriction = assignmentRestriction(for: action) {
+                hint("\(restriction)。请为这个方向键选择其他动作。")
+            } else if action == .system(.toggleScrollMode) {
+                hint("触发后用四个方向键滚动。以相同方式再次触发即可恢复原映射，也可从菜单栏关闭。")
+            } else {
+                hint(SystemAction.otherActions.contains { action == .system($0) }
+                     ? "使用 macOS 常用快捷键，前台 App 需要支持对应操作。"
+                     : "请确认 macOS 已启用相应的系统快捷键。")
+            }
         case .openApp:
             if case .openApp(let app) = action {
                 Label(app.name, systemImage: "app").font(RimoStyle.title)
@@ -1147,13 +1182,12 @@ struct ButtonMappingEditor: View {
     }
 
     private enum ActionGroup: String, CaseIterable, Identifiable {
-        case recommended, keyboard, scroll, media, windows, system, apps, other
+        case recommended, keyboard, media, windows, system, apps, other
         var id: Self { self }
         var title: String {
             switch self {
             case .recommended: "推荐"
             case .keyboard: "键盘"
-            case .scroll: "滚动"
             case .media: "媒体与音量"
             case .windows: "窗口与桌面"
             case .system: "系统操作"
@@ -1256,7 +1290,7 @@ struct ButtonMappingEditor: View {
         var id: Self { self }
         var title: String {
             switch self {
-            case .keyboard: "快捷键"
+            case .keyboard: "自定义"
             case .mouse: "鼠标点击"
             case .scroll: "滚动"
             case .media: "媒体控制"
@@ -1296,11 +1330,12 @@ private struct ActionBrowserRowStyle: ButtonStyle {
         let current: Bool
         @State private var hovered = false
         @Environment(\.isFocused) private var focused
+        @Environment(\.isEnabled) private var enabled
 
         var body: some View {
             configuration.label
                 .background(current ? RimoStyle.assignmentAccent
-                            : hovered || configuration.isPressed ? RimoStyle.assignmentAccent.opacity(0.08) : .clear,
+                            : enabled && (hovered || configuration.isPressed) ? RimoStyle.assignmentAccent.opacity(0.08) : .clear,
                             in: RimoStyle.controlShape)
                 .overlay {
                     RimoStyle.controlShape.strokeBorder(focused ? RimoStyle.assignmentAccent : .clear)
