@@ -476,7 +476,8 @@ struct ButtonMappingEditor: View {
         let query = actionQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         let searching = !query.isEmpty
         let groups = ActionGroup.allCases.filter { group in
-            !searching || (group != .recommended && groupChoices(group).contains { $0.matches(query) })
+            !searching || (group != .recommended && (group.title.localizedStandardContains(query)
+                || groupChoices(group).contains { $0.matches(query) }))
         }
         return VStack(alignment: .leading, spacing: 0) {
             actionSearchField
@@ -496,19 +497,21 @@ struct ButtonMappingEditor: View {
                                 Text(group.title)
                                     .font(.system(size: 14, weight: .semibold))
                                     .frame(maxWidth: .infinity, alignment: .leading)
-                                    .frame(height: 57)
-                                    .padding(.horizontal, 36)
+                                    .frame(height: 50)
+                                    .padding(.horizontal, 33)
                                     .accessibilityAddTraits(.isHeader)
                             } else {
                                 actionGroupButton(group)
                             }
                             if searching || group == .recommended || openGroups.contains(group) {
-                                let items = groupChoices(group).filter { !searching || $0.matches(query) }
+                                let items = groupChoices(group).filter {
+                                    !searching || group.title.localizedStandardContains(query) || $0.matches(query)
+                                }
                                 VStack(spacing: 0) {
                                     ForEach(items) { actionRow($0) }
                                 }
-                                .padding(.horizontal, 17)
-                                .padding(.bottom, 3)
+                                .padding(.horizontal, 16)
+                                .padding(.bottom, 12)
                             }
                             if group != groups.last { sidebarDivider }
                         }
@@ -532,8 +535,9 @@ struct ButtonMappingEditor: View {
     private var actionSearchField: some View {
         HStack(spacing: 12) {
             TextField("搜索", text: $actionQuery, prompt: Text("搜索").foregroundColor(RimoStyle.actionSearchPlaceholder))
-                .font(.system(size: 16, weight: .medium))
+                .font(.system(size: 14))
                 .textFieldStyle(.plain)
+                .foregroundStyle(searchingActions ? RimoStyle.action : RimoStyle.ink)
                 .focused($searchingActions)
                 .accessibilityLabel("搜索动作")
             if !actionQuery.isEmpty {
@@ -542,33 +546,37 @@ struct ButtonMappingEditor: View {
                     searchingActions = true
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 14))
-                        .foregroundStyle(RimoStyle.muted)
+                        .font(.system(size: 18))
+                        .foregroundStyle(RimoStyle.action)
+                        .frame(width: 28, height: 32)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("清除搜索")
-            }
-            Button {
-                searchingActions = true
-            } label: {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 17, weight: .semibold))
-                    .frame(width: 25, height: 36)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("聚焦动作搜索")
-        }
-        .padding(.horizontal, 32)
-        .frame(height: 79)
-        .overlay(alignment: .bottom) {
-            if searchingActions {
-                Rectangle().fill(RimoStyle.assignmentAccent)
-                    .frame(height: 1)
-                    .padding(.horizontal, 32)
-                    .allowsHitTesting(false)
+            } else {
+                Button {
+                    searchingActions = true
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 19, weight: .regular))
+                        .foregroundStyle(RimoStyle.ink)
+                        .frame(width: 28, height: 32)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("聚焦动作搜索")
             }
         }
+        .padding(.leading, 16)
+        .padding(.trailing, 8)
+        .frame(height: 48)
+        .background(RimoStyle.surface, in: RimoStyle.controlShape)
+        .overlay {
+            RimoStyle.controlShape
+                .strokeBorder(searchingActions ? RimoStyle.action : RimoStyle.line)
+                .allowsHitTesting(false)
+        }
+        .padding(16)
     }
 
     private func actionGroupButton(_ group: ActionGroup) -> some View {
@@ -584,8 +592,8 @@ struct ButtonMappingEditor: View {
                     .accessibilityHidden(true)
             }
             .foregroundStyle(expanded ? RimoStyle.assignmentAccent : RimoStyle.ink)
-            .padding(.horizontal, 36)
-            .frame(height: 48)
+            .padding(.horizontal, 33)
+            .frame(height: 50)
         }
         .buttonStyle(ActionBrowserRowStyle())
         .accessibilityValue(expanded ? "已展开" : "已折叠")
@@ -596,7 +604,7 @@ struct ButtonMappingEditor: View {
         return Button {
             searchingActions = false
             kind.wrappedValue = choice.kind
-            if let immediate = choice.action, action != immediate {
+            if let immediate = choice.action, !current {
                 guard model.setAction(immediate, for: button, trigger: trigger, sceneID: sceneID) else { return }
             }
             choosingAction = false
@@ -625,29 +633,37 @@ struct ButtonMappingEditor: View {
     private func groupChoices(_ group: ActionGroup) -> [ActionChoice] {
         switch group {
         case .recommended:
-            let direct: ActionChoice = switch button {
-            case .playPause: .media(.playPause)
-            case .volumeUp: .media(.volumeUp)
-            case .volumeDown: .media(.volumeDown)
-            case .mute: .media(.mute)
-            case .home: .system(.missionControl)
-            case .select: .mouse(.left)
-            case .up, .down: .configure(.scroll)
-            case .siri: .configure(.shortcut)
-            default: .system(.missionControl)
+            let suggested: [ActionChoice] = switch button {
+            case .playPause: [.media(.playPause), .key(UInt16(kVK_Space)), .media(.nextTrack)]
+            case .volumeUp: [.media(.volumeUp), .scroll(.up)]
+            case .volumeDown: [.media(.volumeDown), .scroll(.down)]
+            case .mute: [.media(.mute), .media(.playPause)]
+            case .home: [.system(.missionControl), .system(.showDesktop), .configure(.openApp)]
+            case .select: [.key(UInt16(kVK_Return)), .mouse(.left), .key(UInt16(kVK_Space))]
+            case .up: [.key(UInt16(kVK_UpArrow)), .scroll(.up), .key(UInt16(kVK_PageUp))]
+            case .down: [.key(UInt16(kVK_DownArrow)), .scroll(.down), .key(UInt16(kVK_PageDown))]
+            case .left: [.key(UInt16(kVK_LeftArrow)), .system(.previousDesktop), .media(.previousTrack)]
+            case .right: [.key(UInt16(kVK_RightArrow)), .system(.nextDesktop), .media(.nextTrack)]
+            case .back, .menu: [.key(UInt16(kVK_Escape)), .mouse(.right), .system(.showDesktop)]
+            case .power: [.system(.sleepDisplay), .system(.lockScreen)]
+            case .siri: [.configure(.keyboard), .configure(.shortcut), .configure(.text)]
             }
-            var result: [ActionChoice] = [direct, .configure(.keyboard), .configure(.openApp),
-                                          direct == .configure(.shortcut) ? .configure(.text) : .configure(.shortcut)]
+            var result = suggested
+            if !result.contains(.configure(.keyboard)) { result.append(.configure(.keyboard)) }
             if let action {
                 let current = ActionChoice(current: action)
                 result.removeAll { $0 == current }
                 result.insert(current, at: 0)
             }
             return result
-        case .input:
-            return [.configure(.keyboard)] + MouseAction.allCases.map(ActionChoice.mouse) + [.configure(.scroll), .configure(.text)]
+        case .keyboard:
+            return [.configure(.keyboard), .configure(.text)] + ActionChoice.presetKeyCodes.map(ActionChoice.key)
+        case .mouse: return MouseAction.allCases.map(ActionChoice.mouse)
+        case .scroll: return ScrollAction.Direction.allCases.map(ActionChoice.scroll)
         case .media: return MediaAction.allCases.map(ActionChoice.media)
-        case .system: return SystemAction.allCases.map(ActionChoice.system)
+        case .windows:
+            return [SystemAction.missionControl, .appWindows, .showDesktop, .previousDesktop, .nextDesktop].map(ActionChoice.system)
+        case .system: return [SystemAction.lockScreen, .sleepDisplay].map(ActionChoice.system)
         case .apps: return [.configure(.openApp), .configure(.shortcut)]
         }
     }
@@ -1106,26 +1122,35 @@ struct ButtonMappingEditor: View {
     }
 
     private enum ActionGroup: String, CaseIterable, Identifiable {
-        case recommended, input, media, system, apps
+        case recommended, keyboard, mouse, scroll, media, windows, system, apps
         var id: Self { self }
         var title: String {
             switch self {
             case .recommended: "推荐"
-            case .input: "键盘和鼠标"
-            case .media: "媒体和音量"
-            case .system: "系统和窗口"
+            case .keyboard: "键盘"
+            case .mouse: "鼠标"
+            case .scroll: "滚动"
+            case .media: "媒体与音量"
+            case .windows: "窗口与桌面"
+            case .system: "系统操作"
             case .apps: "应用与快捷指令"
             }
         }
     }
 
     private enum ActionChoice: Hashable, Identifiable {
-        case configure(EditorKind), media(MediaAction), mouse(MouseAction), system(SystemAction)
+        case configure(EditorKind), key(UInt16), scroll(ScrollAction.Direction), media(MediaAction), mouse(MouseAction), system(SystemAction)
+
+        static let presetKeyCodes = [kVK_Return, kVK_Escape, kVK_Space, kVK_Tab, kVK_Delete,
+                                     kVK_UpArrow, kVK_DownArrow, kVK_LeftArrow, kVK_RightArrow,
+                                     kVK_PageUp, kVK_PageDown, kVK_Home, kVK_End].map(UInt16.init)
         var id: Self { self }
 
         var kind: EditorKind {
             switch self {
             case .configure(let kind): kind
+            case .key: .keyboard
+            case .scroll: .scroll
             case .media: .media
             case .mouse: .mouse
             case .system: .system
@@ -1135,15 +1160,44 @@ struct ButtonMappingEditor: View {
         var action: RemoteAction? {
             switch self {
             case .configure: nil
+            case .key(let code): KeyboardShortcut.navigationKeys.first { $0.id == code }
+                .map { .keyboard(KeyboardShortcut(option: $0, flags: [])) }
+            case .scroll(let direction): .scroll(.init(direction: direction))
             case .media(let item): .media(item)
             case .mouse(let item): .mouse(item)
             case .system(let item): .system(item)
             }
         }
 
-        var title: String { action?.title ?? kind.title }
+        var title: String {
+            switch self {
+            case .key(let code):
+                switch Int(code) {
+                case kVK_Return: "回车"
+                case kVK_Escape: "Esc / 退出"
+                case kVK_Space: "空格"
+                case kVK_Tab: "Tab / 制表键"
+                case kVK_Delete: "退格"
+                case kVK_UpArrow: "向上方向键"
+                case kVK_DownArrow: "向下方向键"
+                case kVK_LeftArrow: "向左方向键"
+                case kVK_RightArrow: "向右方向键"
+                case kVK_PageUp: "向上翻页"
+                case kVK_PageDown: "向下翻页"
+                case kVK_Home: "Home / 开头"
+                case kVK_End: "End / 末尾"
+                default: action?.title ?? kind.title
+                }
+            case .scroll(let direction): direction.title
+            default: action?.title ?? kind.title
+            }
+        }
         init(current: RemoteAction) {
             switch current {
+            case .keyboard(let key) where key.modifiers == 0 && key.holdsUntilRelease != true
+                && (key.modifierKeyCodes ?? []).isEmpty && Self.presetKeyCodes.contains(key.keyCode):
+                self = .key(key.keyCode)
+            case .scroll(let value): self = .scroll(value.direction)
             case .media(let item): self = .media(item)
             case .mouse(let item): self = .mouse(item)
             case .system(let item): self = .system(item)
@@ -1152,8 +1206,19 @@ struct ButtonMappingEditor: View {
         }
 
         func represents(_ current: RemoteAction) -> Bool {
-            if let action { return action == current }
-            return kind == EditorKind(action: current)
+            switch self {
+            case .configure: return self == ActionChoice(current: current)
+            case .scroll(let direction):
+                if case .scroll(let value) = current { return value.direction == direction }
+                return false
+            case .key(let code):
+                if case .keyboard(let key) = current {
+                    return key.keyCode == code && key.modifiers == 0 && key.holdsUntilRelease != true
+                        && (key.modifierKeyCodes ?? []).isEmpty
+                }
+                return false
+            default: return action == current
+            }
         }
 
         func matches(_ query: String) -> Bool {
