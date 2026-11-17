@@ -259,6 +259,7 @@ struct RemoteModelView: View {
         let width: CGFloat
         let height: CGFloat
         let radius: CGFloat
+        let surfaceY: Float
         let contour: Contour
 
         enum Contour {
@@ -276,9 +277,10 @@ struct RemoteModelView: View {
         }
 
         init(_ id: RemoteButton, _ x: Float, _ z: Float, _ width: CGFloat, _ height: CGFloat, _ radius: CGFloat,
-             contour: Contour = .rounded) {
+             surfaceY: Float = 0.49, contour: Contour = .rounded) {
             self.id = id; self.x = x; self.z = z
             self.width = width; self.height = height; self.radius = radius
+            self.surfaceY = surfaceY
             self.contour = contour
         }
 
@@ -291,7 +293,7 @@ struct RemoteModelView: View {
                     ? Path(ellipseIn: frame) : Path(roundedRect: frame, cornerRadius: radius)
             case .ring(let angle):
                 let outer: CGFloat = 1.548
-                let inner: CGFloat = 0.887
+                let inner: CGFloat = 0.876
                 let span = Double.pi / 4
                 let start = Angle.radians(angle - span)
                 let end = Angle.radians(angle + span)
@@ -320,7 +322,7 @@ struct RemoteModelView: View {
             // Give the narrow side key some tolerance near an edge-on view.
             guard facing > (side ? -0.16 : 0.16) else { return nil }
             let unit = viewport.unit
-            let center = viewport.point(rotation.act(SIMD3(x, side ? 0.082 : 0.49, z)))
+            let center = viewport.point(rotation.act(SIMD3(x, side ? 0.082 : surfaceY, z)))
             let tangent = rotation.act(side ? SIMD3(0, -1, 0) : SIMD3(1, 0, 0))
             let vertical = rotation.act(SIMD3(0, 0, 1))
             // From straight ahead the side button is seen edge-on.
@@ -388,18 +390,19 @@ struct RemoteModelView: View {
         }
 
         static let all: [Self] = [
-            .init(.power, 1.015, -6.08, 0.62, 0.62, 0.31),
-            .init(.up, -0.034, -3.944, 0, 0, 0, contour: .ring(-.pi / 2)),
-            .init(.left, -0.034, -3.944, 0, 0, 0, contour: .ring(.pi)),
-            .init(.select, -0.034, -3.944, 1.774, 1.774, 0.887),
-            .init(.right, -0.034, -3.944, 0, 0, 0, contour: .ring(0)),
-            .init(.down, -0.034, -3.944, 0, 0, 0, contour: .ring(.pi / 2)),
-            .init(.back, -0.786, -1.647, 1.228, 1.228, 0.614),
-            .init(.home, 0.716, -1.647, 1.228, 1.228, 0.614),
-            .init(.playPause, -0.786, -0.168, 1.228, 1.228, 0.614),
-            .init(.volumeUp, 0.716, -0.115, 1.168, 1.340, 0.584, contour: .rocker(top: true)),
-            .init(.mute, -0.786, 1.312, 1.228, 1.228, 0.614),
-            .init(.volumeDown, 0.716, 1.225, 1.168, 1.340, 0.584, contour: .rocker(top: false)),
+            // Centers, rims and face heights follow the bundled mesh, rather than an evenly spaced grid.
+            .init(.power, 1.021, -6.068, 0.600, 0.600, 0.300, surfaceY: 0.447),
+            .init(.up, -0.034, -3.934, 0, 0, 0, contour: .ring(-.pi / 2)),
+            .init(.left, -0.034, -3.934, 0, 0, 0, contour: .ring(.pi)),
+            .init(.select, -0.034, -3.934, 1.752, 1.752, 0.876, surfaceY: 0.432),
+            .init(.right, -0.034, -3.934, 0, 0, 0, contour: .ring(0)),
+            .init(.down, -0.034, -3.934, 0, 0, 0, contour: .ring(.pi / 2)),
+            .init(.back, -0.788, -1.653, 1.228, 1.228, 0.614),
+            .init(.home, 0.720, -1.652, 1.228, 1.228, 0.614),
+            .init(.playPause, -0.788, -0.185, 1.228, 1.228, 0.614),
+            .init(.volumeUp, 0.720, -0.123, 1.186, 1.344, 0.593, contour: .rocker(top: true)),
+            .init(.mute, -0.788, 1.281, 1.224, 1.224, 0.612),
+            .init(.volumeDown, 0.720, 1.221, 1.186, 1.344, 0.593, contour: .rocker(top: false)),
             .init(.siri, 1.782, -3.934, 0.370, 1.510, 0.185)
         ]
     }
