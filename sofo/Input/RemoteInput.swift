@@ -50,8 +50,28 @@ enum A2540Input {
     }
 }
 
-// Some buttons may appear on multiple HID interfaces. Emit once until every
-// source for that button is released or removed.
+enum RemoteTrigger: String, CaseIterable, Identifiable {
+    case single, doublePress, hold
+
+    var id: Self { self }
+    var title: String {
+        switch self {
+        case .single: "单击"
+        case .doublePress: "双击"
+        case .hold: "长按"
+        }
+    }
+
+    func mappingKey(for button: RemoteButton) -> String {
+        self == .single ? button.rawValue : "\(rawValue).\(button.rawValue)"
+    }
+}
+
+enum RemoteButtonEdge: Equatable {
+    case pressed, released
+}
+
+// Merge duplicate HID sources into one press and release per physical key.
 struct RemoteButtonState {
     struct Source: Hashable {
         let device: UInt
@@ -60,10 +80,15 @@ struct RemoteButtonState {
 
     private var heldBySource: [Source: RemoteButton] = [:]
 
-    mutating func update(_ button: RemoteButton, pressed: Bool, from source: Source) -> Bool {
+    mutating func update(_ button: RemoteButton, pressed: Bool, from source: Source) -> RemoteButtonEdge? {
         let alreadyHeld = heldBySource.values.contains(button)
-        heldBySource[source] = pressed ? button : nil
-        return pressed && !alreadyHeld
+        if pressed {
+            heldBySource[source] = button
+            return alreadyHeld ? nil : .pressed
+        }
+        guard heldBySource.removeValue(forKey: source) == button,
+              !heldBySource.values.contains(button) else { return nil }
+        return .released
     }
 
     mutating func remove(device: UInt) {
@@ -72,5 +97,79 @@ struct RemoteButtonState {
 
     mutating func reset() {
         heldBySource.removeAll()
+    }
+}
+
+/// Recognizes a single sequence on one button using monotonic time.
+struct RemotePressSequence {
+    static let doubleInterval = 0.26
+    static let holdInterval = 0.50
+
+    let recognizesDouble: Bool
+    let recognizesHold: Bool
+
+    private enum Phase {
+        case idle, down(second: Bool, holdAt: Double), waiting(until: Double), consumed
+    }
+
+    private var phase: Phase = .idle
+
+    init(recognizesDouble: Bool, recognizesHold: Bool) {
+        self.recognizesDouble = recognizesDouble
+        self.recognizesHold = recognizesHold
+    }
+
+    var deadline: Double? {
+        switch phase {
+        case .down(_, let holdAt): holdAt
+        case .waiting(let until): until
+        case .idle, .consumed: nil
+        }
+    }
+
+    var isIdle: Bool {
+        if case .idle = phase { return true }
+        return false
+    }
+
+    mutating func advance(to time: Double) -> RemoteTrigger? {
+        guard let deadline, time >= deadline else { return nil }
+        switch phase {
+        case .down:
+            phase = .consumed
+            return recognizesHold ? .hold : .single
+        case .waiting:
+            phase = .idle
+            return .single
+        case .idle, .consumed:
+            return nil
+        }
+    }
+
+    mutating func receive(_ edge: RemoteButtonEdge, at time: Double) -> [RemoteTrigger] {
+        var result = advance(to: time).map { [$0] } ?? []
+        switch (edge, phase) {
+        case (.pressed, .idle):
+            if recognizesDouble || recognizesHold {
+                phase = .down(second: false, holdAt: time + Self.holdInterval)
+            } else {
+                phase = .consumed
+                result.append(.single)
+            }
+        case (.pressed, .waiting):
+            phase = .down(second: true, holdAt: time + Self.holdInterval)
+        case (.released, .down(let second, _)):
+            if second || !recognizesDouble {
+                phase = .idle
+                result.append(second ? .doublePress : .single)
+            } else {
+                phase = .waiting(until: time + Self.doubleInterval)
+            }
+        case (.released, .consumed):
+            phase = .idle
+        default:
+            break
+        }
+        return result
     }
 }

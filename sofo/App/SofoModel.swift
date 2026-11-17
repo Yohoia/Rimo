@@ -6,6 +6,7 @@ import IOKit.hid
 final class SofoModel: ObservableObject {
     @Published private(set) var status: HIDMonitor.Status = .stopped
     @Published private(set) var isRemoteConnected = false
+    @Published private(set) var batteryPercent: Int?
     @Published private(set) var canListen = false
     @Published private(set) var canPost = false
     @Published private(set) var lastButton: RemoteButton?
@@ -13,6 +14,7 @@ final class SofoModel: ObservableObject {
     @Published private(set) var buttonReport: String?
     @Published private(set) var observedButtons: Set<RemoteButton> = []
     @Published private(set) var configurationError: String?
+    @Published private(set) var actionError: String?
     @Published private(set) var paused = false
     @Published private(set) var recording: RemoteButton?
     @Published private(set) var configuration = RemoteConfiguration()
@@ -33,6 +35,16 @@ final class SofoModel: ObservableObject {
     private var workspaceChanges: AnyCancellable?
     private var loadedShortcuts = false
     private var configurationReadFailed = false
+    private var pendingPresses: [RemoteButton: PendingPress] = [:]
+
+    private var heldOutputs: [RemoteButton: KeyboardShortcut] = [:]
+
+    private struct PendingPress {
+        let appPID: pid_t?
+        let actions: [RemoteTrigger: RemoteAction]
+        var sequence: RemotePressSequence
+        var timer: Task<Void, Never>?
+    }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -50,19 +62,27 @@ final class SofoModel: ObservableObject {
 
         workspaceChanges = NSWorkspace.shared.notificationCenter
             .publisher(for: NSWorkspace.didActivateApplicationNotification)
-            .sink { [weak self] _ in self?.frontmostApp = NSWorkspace.shared.frontmostApplication }
+            .sink { [weak self] _ in
+                guard let self else { return }
+                let app = NSWorkspace.shared.frontmostApplication
+                if app?.processIdentifier != self.frontmostApp?.processIdentifier { self.cancelPendingPresses() }
+                self.frontmostApp = app
+            }
 
         hid.onStatus = { [weak self] status in
             self?.status = status
             if status != .connected {
+                self?.cancelPendingPresses()
                 self?.lastButton = nil
                 self?.diagnostic = nil
                 self?.buttonReport = nil
             }
         }
+        hid.onBattery = { [weak self] percent in self?.batteryPercent = percent }
         hid.onDiagnostic = { [weak self] message in self?.diagnostic = message }
         hid.onButtonReport = { [weak self] report in self?.buttonReport = report }
-        hid.onButton = { [weak self] button in self?.handle(button) }
+        hid.onButton = { [weak self] button, edge in self?.handle(button, edge: edge) }
+        hid.onDeviceRemoved = { [weak self] in self?.cancelPendingPresses() }
         voiceChanges = voice.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         refresh()
         connectionTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
@@ -99,6 +119,8 @@ final class SofoModel: ObservableObject {
     private func refreshConnection() {
         let addresses = HIDMonitor.connectedRemoteAddresses()
         isRemoteConnected = !addresses.isEmpty
+        if addresses.count != 1 { batteryPercent = nil }
+        else if let percent = HIDMonitor.batteryPercentage() { batteryPercent = percent }
         if addresses.count == 1 { voice.setAddress(addresses.first) }
     }
 
@@ -113,6 +135,7 @@ final class SofoModel: ObservableObject {
     }
 
     func stop() {
+        cancelPendingPresses()
         connectionTimer?.invalidate()
         connectionTimer = nil
         voice.shutdown()
@@ -131,15 +154,24 @@ final class SofoModel: ObservableObject {
     func scene(_ id: String) -> AppSceneMapping? { configuration.scenes.first { $0.id == id } }
 
     func mappings(sceneID: String? = nil) -> ButtonMappings {
-        sceneID.flatMap(scene)?.buttons ?? configuration.global
+        sceneID.flatMap(scene)?.resolved(global: configuration.global) ?? configuration.global
     }
 
-    func setAction(_ action: RemoteAction?, for button: RemoteButton, sceneID: String? = nil) {
-        updateMappings(sceneID: sceneID) { $0[button] = action }
+    @discardableResult
+    func setAction(_ action: RemoteAction?, for button: RemoteButton, trigger: RemoteTrigger = .single,
+                   sceneID: String? = nil) -> Bool {
+        updateMappings(button, trigger: trigger, sceneID: sceneID) { $0[button, trigger] = action }
     }
 
-    func setActionEnabled(_ enabled: Bool, for button: RemoteButton, sceneID: String? = nil) {
-        updateMappings(sceneID: sceneID) { $0.setEnabled(enabled, for: button) }
+    func setActionEnabled(_ enabled: Bool, for button: RemoteButton, trigger: RemoteTrigger = .single, sceneID: String? = nil) {
+        updateMappings(button, trigger: trigger, sceneID: sceneID) { $0.setEnabled(enabled, for: button, trigger: trigger) }
+    }
+
+    func followGlobal(_ button: RemoteButton, trigger: RemoteTrigger = .single, sceneID: String) {
+        updateConfiguration {
+            guard let index = $0.scenes.firstIndex(where: { $0.id == sceneID }) else { return }
+            $0.scenes[index].followGlobal(button, trigger: trigger)
+        }
     }
 
     func setAutomaticScenes(_ enabled: Bool) {
@@ -152,6 +184,10 @@ final class SofoModel: ObservableObject {
         return updateConfiguration { $0.scenes.append(AppSceneMapping(id: id, name: name, buttons: $0.global)) }
     }
 
+    func applyPreset(_ preset: ScenePreset, id: String, name: String) -> Bool {
+        updateConfiguration { $0.apply(preset, to: id, name: name) }
+    }
+
     func setSceneEnabled(_ enabled: Bool, id: String) {
         updateConfiguration {
             if let index = $0.scenes.firstIndex(where: { $0.id == id }) { $0.scenes[index].enabled = enabled }
@@ -162,11 +198,15 @@ final class SofoModel: ObservableObject {
         updateConfiguration { $0.scenes.removeAll { $0.id == id } }
     }
 
-    private func updateMappings(sceneID: String?, edit: (inout ButtonMappings) -> Void) {
-        updateConfiguration {
+    @discardableResult
+    private func updateMappings(_ button: RemoteButton, trigger: RemoteTrigger, sceneID: String?,
+                                edit: (inout ButtonMappings) -> Void) -> Bool {
+        if let sceneID, scene(sceneID) == nil { return false }
+        return updateConfiguration {
             if let sceneID {
+                let global = $0.global
                 if let index = $0.scenes.firstIndex(where: { $0.id == sceneID }) {
-                    edit(&$0.scenes[index].buttons)
+                    $0.scenes[index].edit(button, trigger: trigger, global: global, edit)
                 }
             } else {
                 edit(&$0.global)
@@ -181,6 +221,7 @@ final class SofoModel: ObservableObject {
         edit(&next)
         do {
             defaults.set(try JSONEncoder().encode(next), forKey: storageKey)
+            cancelPendingPresses()
             configuration = next
             configurationError = nil
             return true
@@ -222,28 +263,103 @@ final class SofoModel: ObservableObject {
 
     func togglePaused() {
         paused.toggle()
+        cancelPendingPresses()
     }
 
     func startRecording(_ button: RemoteButton) {
         recording = button
+        cancelPendingPresses()
     }
 
     func cancelRecording() {
         recording = nil
     }
 
-    private func handle(_ button: RemoteButton) {
-        lastButton = button
-        observedButtons.insert(button)
-        if button == .siri && voice.enabled { return }
-        guard !paused, recording == nil, !isSettingsFocused(),
-              let action = configuration.action(for: button, in: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
-        else { return }
-        switch action {
-        case .keyboard(let shortcut):
-            if !shortcut.post() { canPost = CGPreflightPostEventAccess() }
-        case .shortcut(let shortcut):
-            runShortcut(shortcut)
+    private func handle(_ button: RemoteButton, edge: RemoteButtonEdge) {
+        if edge == .released, let key = heldOutputs.removeValue(forKey: button) {
+            _ = key.post(pressed: false)
         }
+        if edge == .pressed {
+            lastButton = button
+            observedButtons.insert(button)
+        }
+
+        let app = NSWorkspace.shared.frontmostApplication
+        var press = pendingPresses.removeValue(forKey: button)
+        press?.timer?.cancel()
+        guard canDispatch(button) else { return }
+        if press?.appPID != app?.processIdentifier { press = nil }
+
+        if press == nil {
+            guard edge == .pressed else { return }
+            let single = configuration.action(for: button, in: app?.bundleIdentifier)
+            if case .keyboard(let key) = single, key.holdsUntilRelease == true {
+                dispatch(.keyboard(key), heldBy: button)
+                return
+            }
+            let double = configuration.action(for: button, trigger: .doublePress, in: app?.bundleIdentifier)
+            let hold = configuration.action(for: button, trigger: .hold, in: app?.bundleIdentifier)
+            guard double != nil || hold != nil else {
+                if let single { dispatch(single, heldBy: button) }
+                return
+            }
+            let actions: [RemoteTrigger: RemoteAction] = [.single: single, .doublePress: double, .hold: hold]
+                .compactMapValues { $0 }
+            press = PendingPress(appPID: app?.processIdentifier, actions: actions,
+                                 sequence: .init(recognizesDouble: double != nil, recognizesHold: hold != nil))
+        }
+        guard var press else { return }
+        for trigger in press.sequence.receive(edge, at: ProcessInfo.processInfo.systemUptime) {
+            if let action = press.actions[trigger] { dispatch(action, heldBy: edge == .pressed ? button : nil) }
+        }
+        track(press, for: button)
+    }
+
+    private func track(_ press: PendingPress, for button: RemoteButton) {
+        guard !press.sequence.isIdle else { return }
+        var press = press
+        press.timer = nil
+        if let deadline = press.sequence.deadline {
+            let delay = max(0, deadline - ProcessInfo.processInfo.systemUptime)
+            press.timer = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(delay))
+                if !Task.isCancelled { self?.finishDeadline(for: button) }
+            }
+        }
+        pendingPresses[button] = press
+    }
+
+    private func finishDeadline(for button: RemoteButton) {
+        guard var press = pendingPresses.removeValue(forKey: button), canDispatch(button),
+              press.appPID == NSWorkspace.shared.frontmostApplication?.processIdentifier else { return }
+        if let trigger = press.sequence.advance(to: ProcessInfo.processInfo.systemUptime),
+           let action = press.actions[trigger] { dispatch(action, heldBy: trigger == .hold ? button : nil) }
+        track(press, for: button)
+    }
+
+    private func canDispatch(_ button: RemoteButton) -> Bool {
+        !paused && recording == nil && !isSettingsFocused() && !(button == .siri && voice.enabled)
+    }
+
+    private func cancelPendingPresses() {
+        for press in pendingPresses.values { press.timer?.cancel() }
+        pendingPresses.removeAll()
+        for key in heldOutputs.values { _ = key.post(pressed: false) }
+        heldOutputs.removeAll()
+    }
+
+    private func dispatch(_ action: RemoteAction, heldBy button: RemoteButton? = nil) {
+        actionError = nil
+        if case .shortcut(let shortcut) = action {
+            runShortcut(shortcut)
+            return
+        }
+        if let button, case .keyboard(let key) = action, key.holdsUntilRelease == true {
+            if key.post(pressed: true) { heldOutputs[button] = key }
+            else { actionError = "无法发送按键，请检查辅助功能权限。" }
+            return
+        }
+        do { try ActionOutput.perform(action) }
+        catch { actionError = error.localizedDescription; canPost = CGPreflightPostEventAccess() }
     }
 }

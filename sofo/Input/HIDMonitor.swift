@@ -1,5 +1,7 @@
 import Foundation
 import IOKit.hid
+import IOKit.ps
+import Darwin
 
 @MainActor
 final class HIDMonitor {
@@ -7,8 +9,10 @@ final class HIDMonitor {
         case stopped, waiting, connected, failed(Int32)
     }
 
+    var onBattery: ((Int) -> Void)?
     var onStatus: ((Status) -> Void)?
-    var onButton: ((RemoteButton) -> Void)?
+    var onButton: ((RemoteButton, RemoteButtonEdge) -> Void)?
+    var onDeviceRemoved: (() -> Void)?
     var onDiagnostic: ((String) -> Void)?
     var onButtonReport: ((String) -> Void)?
     var onRemoteAddress: ((String) -> Void)?
@@ -31,6 +35,48 @@ final class HIDMonitor {
             guard let value, (try? RemoteVoicePackets(address: value)) != nil else { return nil }
             return value.replacingOccurrences(of: "-", with: ":").lowercased()
         })
+    }
+
+    static func batteryPercentage() -> Int? {
+        if let percent = accessoryBatteryPercentage() { return percent }
+        let probe = IOHIDManagerCreate(kCFAllocatorDefault, 0)
+        IOHIDManagerSetDeviceMatchingMultiple(probe, A2540Input.vendorIDs.map {
+            [kIOHIDVendorIDKey: $0, kIOHIDProductIDKey: A2540Input.productID]
+        } as CFArray)
+        let devices = IOHIDManagerCopyDevices(probe) as? Set<IOHIDDevice> ?? []
+        let values = Set(devices.compactMap { device -> Int? in
+            guard let value = IOHIDDeviceGetProperty(device, "BatteryPercent" as CFString) as? Int,
+                  (0...100).contains(value) else { return nil }
+            return value
+        })
+        // Avoid showing another remote's level when multiple physical devices are present.
+        return values.count == 1 ? values.first : nil
+    }
+
+    // The default IOPS snapshot excludes Bluetooth accessory sources. Request all
+    // sources through the optional system export, retaining HID as a fallback.
+    private static func accessoryBatteryPercentage() -> Int? {
+        guard let library = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY) else { return nil }
+        defer { dlclose(library) }
+        guard let symbol = dlsym(library, "IOPSCopyPowerSourcesByType") else { return nil }
+        typealias CopySources = @convention(c) (Int32) -> Unmanaged<CFTypeRef>?
+        let copySources = unsafeBitCast(symbol, to: CopySources.self)
+        guard let snapshot = copySources(0)?.takeRetainedValue(),
+              let sources = IOPSCopyPowerSourcesList(snapshot)?.takeRetainedValue() as? [CFTypeRef] else { return nil }
+        let addresses = connectedRemoteAddresses()
+        guard addresses.count == 1 else { return nil }
+        let levels = sources.compactMap { source -> Int? in
+            guard let info = IOPSGetPowerSourceDescription(snapshot, source)?.takeUnretainedValue() as? [String: Any],
+                  info["Type"] as? String == "Accessory Source",
+                  let vendor = info["Vendor ID"] as? Int, A2540Input.vendorIDs.contains(vendor),
+                  info["Product ID"] as? Int == A2540Input.productID,
+                  let current = info["Current Capacity"] as? Int,
+                  let maximum = info["Max Capacity"] as? Int,
+                  maximum > 0, (0...maximum).contains(current),
+                  info["Is Present"] as? Bool != false else { return nil }
+            return Int((Double(current) / Double(maximum) * 100).rounded())
+        }
+        return levels.count == 1 ? levels.first : nil
     }
 
     func start() {
@@ -136,6 +182,7 @@ final class HIDMonitor {
         let deviceID = id(of: device)
         devices.remove(deviceID)
         buttons.remove(device: deviceID)
+        onDeviceRemoved?()
         onStatus?(devices.isEmpty ? .waiting : .connected)
     }
 
@@ -147,14 +194,23 @@ final class HIDMonitor {
 
         let page = IOHIDElementGetUsagePage(element)
         let usage = IOHIDElementGetUsage(element)
+        // Generic Device Controls / Battery Strength, scaled by the declared logical range.
+        if page == 0x06 && usage == 0x20 {
+            let low = IOHIDElementGetLogicalMin(element), high = IOHIDElementGetLogicalMax(element)
+            let raw = IOHIDValueGetIntegerValue(value)
+            if high > low, (low...high).contains(raw) {
+                onBattery?(Int((Double(raw) - Double(low)) / (Double(high) - Double(low)) * 100))
+            }
+            return
+        }
         guard page == 0x01 || page == 0x0c else { return }
         let pressed = IOHIDValueGetIntegerValue(value) != 0
         onDiagnostic?(String(format: "HID %02X/%02X · %@", page, usage, pressed ? "按下" : "松开"))
         let reportID = IOHIDElementGetReportID(element)
         guard let button = A2540Input.button(page: page, usage: usage, reportID: reportID) else { return }
         let cookie = IOHIDElementGetCookie(element)
-        if buttons.update(button, pressed: pressed, from: .init(device: deviceID, cookie: cookie)) {
-            onButton?(button)
+        if let edge = buttons.update(button, pressed: pressed, from: .init(device: deviceID, cookie: cookie)) {
+            onButton?(button, edge)
         }
     }
 

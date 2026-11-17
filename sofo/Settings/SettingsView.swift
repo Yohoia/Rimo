@@ -2,20 +2,27 @@ import AppKit
 import SwiftUI
 
 enum SofoStyle {
-    // Light tokens agree across design/tokens.json, variables.css and theme.css.
-    static let canvas = adaptive(light: 0xFAFAFA, dark: 0x171717)
+    // Main app palette; see docs/device-interface.md.
+    static let canvas = adaptive(light: 0xFBFBFB, dark: 0x171717)
     static let surface = adaptive(light: 0xFFFFFF, dark: 0x202020)
-    static let line = adaptive(light: 0xEBEBEB, dark: 0x363636)
-    static let ink = adaptive(light: 0x171717, dark: 0xFAFAFA)
-    static let muted = adaptive(light: 0x666666, dark: 0xA8A8A8)
-    static let secondaryText = adaptive(light: 0x4D4D4D, dark: 0xC9C9C9)
+    static let line = adaptive(light: 0xE1E2E3, dark: 0x363636)
+    static let ink = adaptive(light: 0x171717, dark: 0xFBFBFB)
+    static let muted = adaptive(light: 0x6F7171, dark: 0xA8A8A8)
+    static let secondaryText = adaptive(light: 0x434546, dark: 0xC9C9C9)
     static let quiet = adaptive(light: 0xC9C9C9, dark: 0x606060)
-    static let action = ink
-    static let actionPressed = secondaryText
-    static let actionLabel = adaptive(light: 0xFFFFFF, dark: 0x171717)
+    static let action = Color(red: 129.0 / 255, green: 78.0 / 255, blue: 250.0 / 255)
+    static let actionPressed = Color(red: 110.0 / 255, green: 61.0 / 255, blue: 224.0 / 255)
+    static let actionLabel = Color.white
+    static let assignmentAccent = adaptive(light: 0x814EFA, dark: 0x00EAD0)
+    static let assignmentInk = adaptive(light: 0xFFFFFF, dark: 0x000000)
+    static let assignmentBorder = adaptive(light: 0x6039B2, dark: 0x03BAA5)
+    static let actionSidebarHeader = adaptive(light: 0xEBEBEB, dark: 0x292929)
+    static let actionSidebarDivider = adaptive(light: 0xEEEEEE, dark: 0x363636)
+    static let actionRadio = adaptive(light: 0xE1E2E3, dark: 0x555555)
+    static let actionSearchPlaceholder = adaptive(light: 0xA2A3A5, dark: 0xA8A8A8)
     static let success = adaptive(light: 0x297A3A, dark: 0x79CE88)
 
-    static let cardRadius: CGFloat = 6
+    static let cardRadius: CGFloat = 4
     static let navRadius: CGFloat = 2
     static let cardPadding: CGFloat = 16
     static let elementGap: CGFloat = 12
@@ -24,10 +31,10 @@ enum SofoStyle {
         return (dark ? NSColor.white : NSColor.black).withAlphaComponent(dark ? 0.16 : 0.08)
     })
 
-    static let body = Font.custom("Geist-Regular", fixedSize: 14)
-    static let title = Font.custom("Geist-Medium", fixedSize: 14)
-    static let label = Font.custom("GeistMono-Regular", fixedSize: 12)
-    static let caption = Font.custom("GeistMono-Regular", fixedSize: 13)
+    static let body = Font.system(size: 14)
+    static let title = Font.system(size: 14, weight: .bold)
+    static let label = Font.system(size: 13)
+    static let caption = Font.system(size: 13)
     static let heading = Font.custom("Geist-Regular", fixedSize: 30)
     static let headingTracking: CGFloat = -1.5
     static let prose = Font.custom("Geist-Regular", fixedSize: 16)
@@ -96,10 +103,10 @@ struct SofoButtonStyle: ButtonStyle {
             let active = enabled && (hovering || configuration.isPressed)
             let shape = SofoStyle.controlShape
             configuration.label
-                .font(SofoStyle.body)
+                .font(.system(size: 14, weight: primary ? .bold : .regular))
                 .foregroundStyle(enabled ? (primary ? SofoStyle.actionLabel : SofoStyle.secondaryText) : SofoStyle.muted)
                 .padding(.horizontal, 12)
-                .frame(minHeight: 32)
+                .frame(minHeight: 40)
                 .background(enabled ? (primary ? (active ? SofoStyle.actionPressed : SofoStyle.action) : active ? SofoStyle.line : .clear)
                             : SofoStyle.canvas, in: shape)
                 .overlay {
@@ -107,7 +114,7 @@ struct SofoButtonStyle: ButtonStyle {
                         .allowsHitTesting(false)
                 }
                 .overlay {
-                    shape.strokeBorder(focused ? SofoStyle.ink : .clear, lineWidth: 2)
+                    shape.strokeBorder(focused ? SofoStyle.action : .clear, lineWidth: 2)
                         .padding(-3)
                         .allowsHitTesting(false)
                 }
@@ -120,12 +127,70 @@ struct SofoButtonStyle: ButtonStyle {
 
 struct SofoSettingsView: View {
     @ObservedObject var model: SofoModel
-    @State private var tab = SettingsTab.mapping
+    @State private var tab = SettingsTab.home
     @State private var selected: RemoteButton?
+    @State private var deviceDetail = false
+    @State private var addApp = false
+    @State private var warmScene = false
+    @State private var sceneReady = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var showing3D: Bool { tab == .mapping && sceneReady }
+    private var editingButton: Bool { tab == .mapping && selected != nil }
 
     var body: some View {
+        GeometryReader { geometry in
+            let width = ActionSidebarLayout.width(in: geometry.size.width)
+            content(sidebarWidth: width)
+                .overlay(alignment: .trailing) {
+                    ZStack(alignment: .trailing) {
+                        if showing3D, let selected {
+                            actionSidebar(for: selected, width: width)
+                                .transition(.move(edge: .trailing))
+                        }
+                    }
+                    .animation(reduceMotion ? nil : sidebarAnimation, value: showing3D && editingButton)
+                }
+                .clipped()
+        }
+        .sheet(isPresented: $addApp) {
+            AppScenePicker(excluded: Set(model.configuration.scenes.map(\.id))) { app in
+                _ = model.addScene(id: app.id, name: app.name)
+                tab = .scenes
+            }
+        }
+        .background(SofoStyle.canvas)
+        .ignoresSafeArea(.container, edges: .top)
+        .tint(SofoStyle.action)
+        .foregroundStyle(SofoStyle.ink)
+        .font(SofoStyle.body)
+        .onChange(of: tab) { next in
+            if next != .home && next != .mapping { warmScene = false; sceneReady = false }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            model.refresh()
+        }
+    }
+
+    private var sidebarAnimation: Animation {
+        editingButton ? .easeOut(duration: 0.25).delay(0.18) : .easeInOut(duration: 0.24)
+    }
+
+    private func actionSidebar(for button: RemoteButton, width: CGFloat) -> some View {
+        ButtonMappingEditor(model: model, button: button, inSidebar: true,
+                            close: { selected = nil }, openShortcuts: {
+                                selected = nil
+                                tab = .shortcuts
+                            })
+            .id(button)
+            .frame(width: width)
+            .frame(maxHeight: .infinity)
+            .background { SofoStyle.surface.shadow(color: .black.opacity(0.08), radius: 18, x: -6) }
+    }
+
+    private func content(sidebarWidth: CGFloat) -> some View {
         VStack(spacing: 0) {
-            header
+            header(sidebarWidth: sidebarWidth)
             if let error = model.configurationError {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .font(SofoStyle.body)
@@ -135,91 +200,226 @@ struct SofoSettingsView: View {
             }
             Group {
                 switch tab {
-                case .mapping:
-                    MappingView(model: model, selected: $selected, openShortcuts: { tab = .shortcuts })
+                case .home, .mapping:
+                    ZStack {
+                        if warmScene || tab == .mapping {
+                            MappingView(model: model, selected: $selected,
+                                        presentationActive: showing3D, onReady: { sceneReady = true })
+                                // A near-transparent view renders its first frame while the still covers it.
+                                .opacity(showing3D ? 1 : 0.001)
+                                .allowsHitTesting(showing3D)
+                                .accessibilityHidden(!showing3D)
+                        }
+                        DeviceHomeView(model: model) {
+                            selected = nil
+                            deviceDetail = true
+                            tab = .mapping
+                        }
+                        .opacity(showing3D ? 0 : 1)
+                        .allowsHitTesting(tab == .home)
+                        .accessibilityHidden(showing3D)
+                    }
+                    .task { warmScene = true }
                 case .scenes:
-                    ScenesPage(model: model)
+                    ScenesPage(model: model, openDeviceSettings: { tab = .device })
+                        .padding(.leading, deviceDetail ? 170 : 0)
                 case .shortcuts:
                     ShortcutsPage(model: model) { button in
                         selected = button
+                        deviceDetail = true
                         tab = .mapping
                     }
+                    .padding(.leading, deviceDetail ? 170 : 0)
                 case .device:
                     DevicePage(model: model)
+                        .padding(.leading, deviceDetail ? 170 : 0)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .background(SofoStyle.canvas)
-        .ignoresSafeArea(.container, edges: .top)
-        .tint(SofoStyle.ink)
-        .foregroundStyle(SofoStyle.ink)
-        .font(SofoStyle.body)
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            model.refresh()
+            .overlay(alignment: .leading) {
+                if deviceDetail && (tab != .mapping || showing3D) {
+                    deviceSidebar
+                }
+            }
         }
     }
 
-    private var header: some View {
-        ZStack {
-            HStack {
-                HStack(spacing: 8) {
+    @ViewBuilder private func header(sidebarWidth: CGFloat) -> some View {
+        if deviceDetail {
+            deviceHeader(sidebarWidth: sidebarWidth)
+        } else {
+            homeHeader
+        }
+    }
+
+    private var homeHeader: some View {
+        HStack(alignment: .center, spacing: 0) {
+            Button {
+                selected = nil
+                tab = .home
+            } label: {
+                HStack(spacing: 10) {
                     Image(nsImage: NSApplication.shared.applicationIconImage)
                         .resizable()
                         .scaledToFit()
-                        .frame(width: 54, height: 54)
+                        .frame(width: 44, height: 44)
                         .accessibilityHidden(true)
                     Text(verbatim: "sofo")
-                        .font(SofoStyle.brand)
-                        .tracking(-2.45)
+                        .font(.custom("Geist-Medium", fixedSize: 38))
+                        .tracking(-1.4)
                         .fixedSize()
                 }
                 .foregroundStyle(SofoStyle.ink)
-                .frame(height: 54)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("sofo 首页")
+            .help("返回遥控器首页")
 
-                Spacer()
-                if tab == .mapping {
-                    HStack(spacing: 9) {
-                        Text(model.paused ? "映射已暂停" : "启用映射")
-                            .font(SofoStyle.label)
-                            .tracking(0.85)
-                            .foregroundStyle(SofoStyle.muted)
-                            .accessibilityHidden(true)
-                        Toggle("启用映射", isOn: enabled)
-                            .labelsHidden()
-                            .toggleStyle(SofoPillSwitch(width: 44, height: 20))
+            Spacer(minLength: 24)
+
+            HStack(spacing: 12) {
+                if tab != .home {
+                    toolbarButton("遥控器首页", icon: "appletvremote.gen4", selected: false) {
+                        selected = nil
+                        tab = .home
                     }
                 }
+                toolbarButton("场景", icon: "square.3.layers.3d", selected: tab == .scenes) {
+                    tab = tab == .scenes ? .home : .scenes
+                }
+                toolbarButton("快捷指令", icon: "command", selected: tab == .shortcuts) {
+                    tab = tab == .shortcuts ? .home : .shortcuts
+                }
+
+                Rectangle().fill(SofoStyle.line).frame(width: 1, height: 24).padding(.horizontal, 8)
+                    .accessibilityHidden(true)
+
+                toolbarButton(model.paused ? "恢复映射" : "暂停映射",
+                              icon: model.paused ? "play.circle" : "pause.circle", selected: model.paused) {
+                    model.togglePaused()
+                }
+                toolbarButton("设备设置", icon: "gearshape", selected: tab == .device) {
+                    tab = tab == .device ? .home : .device
+                }
             }
-            .padding(.horizontal, 35)
-            navigation
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("功能菜单")
         }
-        .frame(height: 54)
-        .offset(y: 8)
-        .padding(.top, 41)
+        .padding(.leading, 52)
+        .padding(.trailing, 32)
+        .frame(height: 100)
+        .padding(.top, 22)
+        .padding(.bottom, 12)
     }
 
-    private var navigation: some View {
-        HStack(spacing: 6) {
-            ForEach(SettingsTab.allCases) { item in
-                Button { tab = item } label: { Label(item.title, systemImage: item.icon) }
-                    .buttonStyle(SofoNavigationStyle(selected: tab == item))
-                    .accessibilityAddTraits(tab == item ? .isSelected : [])
+    private func deviceHeader(sidebarWidth: CGFloat) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                if !editingButton {
+                    deviceDetail = false
+                    tab = .home
+                }
+                selected = nil
+            } label: {
+                Image(systemName: "arrow.left")
+                    .font(.system(size: 20, weight: .medium))
+                    .frame(width: 36, height: 40)
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel(editingButton ? "返回按键列表" : "返回首页")
+            .keyboardShortcut(editingButton ? .cancelAction : nil)
+            if !editingButton {
+                Text("Apple TV Siri Remote")
+                    .font(.system(size: 30, weight: .bold))
+                    .accessibilityAddTraits(.isHeader)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+            Spacer(minLength: 24)
+            Button { selected = nil; tab = .mapping } label: {
+                Image(systemName: "circle.grid.2x2")
+                    .font(.system(size: 21))
+                    .frame(width: 40, height: 42)
+                    .foregroundStyle(SofoStyle.action)
+                    .overlay(alignment: .bottom) {
+                        Rectangle().fill(SofoStyle.action).frame(width: 32, height: 2)
+                    }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("全局映射")
+            .help("全局映射")
+            Rectangle().fill(SofoStyle.line).frame(width: 1, height: 24).padding(.horizontal, 16)
+                .accessibilityHidden(true)
+            Button { addApp = true } label: {
+                Label("添加应用程序", systemImage: "plus")
+                    .font(.system(size: 14, weight: .bold))
+                    .frame(minHeight: 40)
+            }
+            .buttonStyle(.plain)
         }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("设置导航")
+        .padding(.leading, 44)
+        .padding(.trailing, editingButton ? sidebarWidth + max(48, sidebarWidth * 0.19) : 48)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.29), value: editingButton)
+        .frame(height: 76)
+        .padding(.top, 22)
+        .padding(.bottom, 12)
     }
 
-    private var enabled: Binding<Bool> {
-        Binding(get: { !model.paused }, set: { if $0 == model.paused { model.togglePaused() } })
+    private var deviceSidebar: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Spacer()
+            VStack(alignment: .leading, spacing: 16) {
+                deviceSection("按钮", icon: "switch.2", destination: .mapping)
+                deviceSection("场景", icon: "square.3.layers.3d", destination: .scenes)
+                deviceSection("快捷指令", icon: "command", destination: .shortcuts)
+                deviceSection("设置", icon: "slider.horizontal.3", destination: .device)
+            }
+            Spacer()
+            DeviceBatteryBadge(model: model)
+                .padding(.bottom, 34)
+        }
+        .padding(.leading, 46)
+        .frame(width: 166, alignment: .leading)
+        .offset(x: editingButton ? -176 : 0)
+        .opacity(editingButton ? 0 : 1)
+        .allowsHitTesting(!editingButton)
+        .accessibilityHidden(editingButton)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.30), value: editingButton)
+    }
+
+    private func deviceSection(_ title: String, icon: String, destination: SettingsTab) -> some View {
+        Button { selected = nil; tab = destination } label: {
+            Label(title, systemImage: icon)
+                .font(.system(size: 14, weight: .medium))
+                .labelStyle(.titleAndIcon)
+                .padding(.horizontal, 14)
+                .frame(height: 40)
+                .foregroundStyle(tab == destination ? .white : SofoStyle.ink)
+                .background(tab == destination ? SofoStyle.action : .clear, in: SofoStyle.controlShape)
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(tab == destination ? .isSelected : [])
+    }
+
+    private func toolbarButton(_ title: String, icon: String, selected: Bool,
+                               action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 22, weight: .regular))
+                .frame(width: 40, height: 40)
+        }
+        .buttonStyle(HomeToolbarStyle(selected: selected))
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .help(title)
     }
 
     private enum SettingsTab: CaseIterable, Identifiable {
-        case mapping, scenes, shortcuts, device
+        case home, mapping, scenes, shortcuts, device
         var id: Self { self }
         var title: String {
             switch self {
+            case .home: "首页"
             case .mapping: "映射"
             case .scenes: "场景"
             case .shortcuts: "快捷指令"
@@ -228,6 +428,7 @@ struct SofoSettingsView: View {
         }
         var icon: String {
             switch self {
+            case .home: "house"
             case .mapping: "square.grid.2x2"
             case .scenes: "square.3.layers.3d"
             case .shortcuts: "command"
@@ -237,32 +438,124 @@ struct SofoSettingsView: View {
     }
 }
 
-private struct SofoNavigationStyle: ButtonStyle {
+/// The home screen displays the bundled still while SceneKit prepares the detail view.
+private struct DeviceHomeView: View {
+    @ObservedObject var model: SofoModel
+    let openDevice: () -> Void
+    @State private var hovered = false
+    @FocusState private var focused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        GeometryReader { geometry in
+            let imageHeight = RemotePresentation.height(in: geometry.size.height)
+            VStack(spacing: 20) {
+                Button(action: openDevice) {
+                    Image("RemotePreview")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(height: imageHeight)
+                        .opacity(model.isRemoteConnected ? 1 : 0.40)
+                        .shadow(color: .black.opacity(model.isRemoteConnected ? 0.20 : 0.08),
+                                radius: 13, x: 20, y: 15)
+                        .padding(.horizontal, 32)
+                        .padding(.vertical, 4)
+                        .contentShape(Rectangle())
+                        .offset(y: hovered || focused ? -12 : 0)
+                }
+                .buttonStyle(.plain)
+                .focused($focused)
+                .disabled(!model.isRemoteConnected)
+                .onHover { hovered = $0 }
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.20), value: hovered || focused)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 4)
+                        .strokeBorder(focused ? SofoStyle.action : .clear, lineWidth: 2)
+                        .allowsHitTesting(false)
+                }
+                .accessibilityLabel("Apple TV Siri Remote A2540")
+                .accessibilityHint(model.isRemoteConnected ? "打开 3D 遥控器与按键映射" : "请先连接遥控器")
+                .help(model.isRemoteConnected ? "A2540 · 点击自定义按键" : "A2540 · 未连接")
+
+                DeviceBatteryBadge(model: model)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .offset(y: -min(40, geometry.size.height * 0.07))
+        }
+    }
+}
+
+private struct DeviceBatteryBadge: View {
+    @ObservedObject var model: SofoModel
+
+    private var batteryColor: Color {
+        guard model.isRemoteConnected, let percent = model.batteryPercent else { return SofoStyle.muted }
+        return percent <= 10 ? Color(red: 244.0 / 255, green: 61.0 / 255, blue: 61.0 / 255)
+            : percent <= 20 ? Color(red: 255.0 / 255, green: 164.0 / 255, blue: 20.0 / 255)
+            : Color(red: 121.0 / 255, green: 224.0 / 255, blue: 83.0 / 255)
+    }
+
+    private var batterySymbol: String {
+        guard let percent = model.batteryPercent else { return "battery.0percent" }
+        return percent <= 10 ? "battery.0percent" : percent <= 35 ? "battery.25percent"
+            : percent <= 60 ? "battery.50percent" : percent <= 85 ? "battery.75percent" : "battery.100percent"
+    }
+
+    var body: some View {
+                HStack(spacing: 9) {
+                    HStack(spacing: 6) {
+                        Text(model.isRemoteConnected ? model.batteryPercent.map { "\($0)%" } ?? "电量未知" : "未连接")
+                            .font(.system(size: 14, weight: .bold))
+                            .monospacedDigit()
+                        Image(systemName: batterySymbol)
+                            .font(.system(size: 14, weight: .semibold))
+                    }
+                    .foregroundStyle(batteryColor)
+                    Image("BluetoothMark")
+                        .resizable()
+                        .renderingMode(.template)
+                        .scaledToFit()
+                        .frame(width: 11, height: 16)
+                        .foregroundStyle(model.isRemoteConnected ? SofoStyle.ink : SofoStyle.muted)
+                }
+                .padding(.horizontal, 12)
+                .frame(height: 38)
+                .background(SofoStyle.surface, in: RoundedRectangle(cornerRadius: 4))
+                .overlay { RoundedRectangle(cornerRadius: 4).strokeBorder(SofoStyle.line.opacity(0.65)) }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(model.isRemoteConnected
+                    ? "蓝牙已连接，" + (model.batteryPercent.map { "电量 \($0)%" } ?? "暂未读取到电量") : "遥控器未连接")
+                .help(model.isRemoteConnected && model.batteryPercent == nil ? "暂未读取到电量，等待系统更新" : model.statusTitle)
+    }
+}
+
+private struct HomeToolbarStyle: ButtonStyle {
     let selected: Bool
 
     func makeBody(configuration: Configuration) -> some View {
-        Item(label: configuration.label, selected: selected, pressed: configuration.isPressed)
+        Surface(configuration: configuration, selected: selected)
     }
 
-    private struct Item: View {
-        let label: ButtonStyle.Configuration.Label
+    private struct Surface: View {
+        let configuration: ButtonStyle.Configuration
         let selected: Bool
-        let pressed: Bool
         @State private var hovered = false
-        @Environment(\.accessibilityReduceMotion) private var reduceMotion
         @Environment(\.isFocused) private var focused
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
         var body: some View {
-            let shape = RoundedRectangle(cornerRadius: SofoStyle.navRadius)
-            label.font(selected ? SofoStyle.title : SofoStyle.body)
-                .foregroundStyle(selected || hovered || pressed ? SofoStyle.ink : SofoStyle.muted)
-                .padding(.horizontal, 12)
-                .frame(height: 36)
-                .background(selected ? SofoStyle.line : hovered || pressed ? SofoStyle.surface : .clear, in: shape)
-                .overlay { shape.strokeBorder(focused ? SofoStyle.ink : .clear, lineWidth: 2).allowsHitTesting(false) }
-                .contentShape(shape)
+            configuration.label
+                .foregroundStyle(selected ? SofoStyle.action : SofoStyle.ink)
+                .background(hovered || configuration.isPressed ? SofoStyle.line.opacity(0.55) : .clear,
+                            in: SofoStyle.controlShape)
+                .overlay {
+                    SofoStyle.controlShape.strokeBorder(focused ? SofoStyle.action : .clear, lineWidth: 2)
+                        .padding(-2)
+                        .allowsHitTesting(false)
+                }
+                .contentShape(Rectangle())
                 .onHover { hovered = $0 }
-                .animation(reduceMotion ? nil : .easeOut(duration: SofoStyle.stateDuration), value: hovered)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: hovered)
         }
     }
 }

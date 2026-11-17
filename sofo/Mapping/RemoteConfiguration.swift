@@ -1,3 +1,5 @@
+import AppKit
+import Carbon.HIToolbox
 import Foundation
 
 struct SystemShortcut: Codable, Hashable, Identifiable {
@@ -8,28 +10,148 @@ struct SystemShortcut: Codable, Hashable, Identifiable {
 enum RemoteAction: Codable, Equatable {
     case keyboard(KeyboardShortcut)
     case shortcut(SystemShortcut)
+    case mouse(MouseAction)
+    case scroll(ScrollAction)
+    case media(MediaAction)
+    case system(SystemAction)
+    case openApp(AppTarget)
+    case text(TextAction)
 
     var title: String {
         switch self {
         case .keyboard(let key): key.title
         case .shortcut(let shortcut): shortcut.name
+        case .mouse(let action): action.title
+        case .scroll(let action): "\(action.direction.title) · \(action.amount)"
+        case .media(let action): action.title
+        case .system(let action): action.title
+        case .openApp(let app): "打开 \(app.name)"
+        case .text: "输入预设文本"
         }
     }
+}
+
+enum MouseAction: String, Codable, CaseIterable, Identifiable {
+    case left, right, doubleClick, middle
+    var id: Self { self }
+    var title: String {
+        switch self {
+        case .left: "左键单击"
+        case .right: "右键单击"
+        case .doubleClick: "左键双击"
+        case .middle: "中键单击"
+        }
+    }
+}
+
+struct ScrollAction: Codable, Equatable {
+    enum Direction: String, Codable, CaseIterable, Identifiable {
+        case up, down, left, right
+        var id: Self { self }
+        var title: String {
+            switch self {
+            case .up: "向上滚动"
+            case .down: "向下滚动"
+            case .left: "向左滚动"
+            case .right: "向右滚动"
+            }
+        }
+    }
+    var direction: Direction = .down
+    var amount = 80
+    var boundedAmount: Int { min(600, max(10, amount)) }
+    var deltas: (vertical: Int32, horizontal: Int32) {
+        let value = Int32(boundedAmount)
+        switch direction {
+        case .up: return (value, 0)
+        case .down: return (-value, 0)
+        case .left: return (0, value)
+        case .right: return (0, -value)
+        }
+    }
+}
+
+enum MediaAction: String, Codable, CaseIterable, Identifiable {
+    case playPause, nextTrack, previousTrack, volumeUp, volumeDown, mute
+    var id: Self { self }
+    var title: String {
+        switch self {
+        case .playPause: "播放 / 暂停"
+        case .nextTrack: "下一首"
+        case .previousTrack: "上一首"
+        case .volumeUp: "增大音量"
+        case .volumeDown: "减小音量"
+        case .mute: "静音 / 取消静音"
+        }
+    }
+    var keyCode: Int {
+        switch self {
+        case .playPause: 16
+        case .nextTrack: 17
+        case .previousTrack: 18
+        case .volumeUp: 0
+        case .volumeDown: 1
+        case .mute: 7
+        }
+    }
+}
+
+enum SystemAction: String, Codable, CaseIterable, Identifiable {
+    case missionControl, appWindows, previousDesktop, nextDesktop, showDesktop, lockScreen, sleepDisplay
+    var id: Self { self }
+    var title: String {
+        switch self {
+        case .missionControl: "调度中心"
+        case .appWindows: "当前 App 的全部窗口"
+        case .previousDesktop: "上一个桌面"
+        case .nextDesktop: "下一个桌面"
+        case .showDesktop: "显示桌面"
+        case .lockScreen: "锁定屏幕"
+        case .sleepDisplay: "关闭显示器"
+        }
+    }
+    var shortcut: KeyboardShortcut? {
+        let key: Int
+        let flags: NSEvent.ModifierFlags
+        switch self {
+        case .missionControl: (key, flags) = (kVK_UpArrow, .control)
+        case .appWindows: (key, flags) = (kVK_DownArrow, .control)
+        case .previousDesktop: (key, flags) = (kVK_LeftArrow, .control)
+        case .nextDesktop: (key, flags) = (kVK_RightArrow, .control)
+        case .showDesktop: (key, flags) = (kVK_F11, [])
+        case .lockScreen: (key, flags) = (kVK_ANSI_Q, [.control, .command])
+        case .sleepDisplay: return nil
+        }
+        return KeyboardShortcut(option: .init(id: UInt16(key), title: title), flags: flags)
+    }
+}
+
+struct AppTarget: Codable, Equatable {
+    let bundleIdentifier: String
+    let name: String
+}
+
+struct TextAction: Codable, Equatable {
+    var value = ""
+    var appendReturn = false
 }
 
 struct ButtonMappings: Codable, Equatable {
     var actions: [String: RemoteAction] = [:]
     private var disabled: Set<String> = []
 
-    subscript(_ button: RemoteButton) -> RemoteAction? {
-        get { actions[button.rawValue] }
-        set { actions[button.rawValue] = newValue }
+    subscript(_ button: RemoteButton, _ trigger: RemoteTrigger = .single) -> RemoteAction? {
+        get { actions[trigger.mappingKey(for: button)] }
+        set { actions[trigger.mappingKey(for: button)] = newValue }
     }
 
-    func isEnabled(_ button: RemoteButton) -> Bool { !disabled.contains(button.rawValue) }
+    func isEnabled(_ button: RemoteButton, trigger: RemoteTrigger = .single) -> Bool {
+        !disabled.contains(trigger.mappingKey(for: button))
+    }
 
-    mutating func setEnabled(_ enabled: Bool, for button: RemoteButton) {
-        if enabled { disabled.remove(button.rawValue) } else { disabled.insert(button.rawValue) }
+    mutating func setEnabled(_ enabled: Bool, for button: RemoteButton, trigger: RemoteTrigger = .single) {
+        let key = trigger.mappingKey(for: button)
+        if enabled { disabled.remove(key) } else { disabled.insert(key) }
     }
 }
 
@@ -38,6 +160,112 @@ struct AppSceneMapping: Codable, Identifiable, Equatable {
     let name: String
     var enabled = true
     var buttons: ButtonMappings
+    // Older and manually created scenes keep their full copy of the mapping.
+    private(set) var overrides: Set<String>? = nil
+
+    var canFollowGlobal: Bool { overrides != nil }
+
+    func inherits(_ button: RemoteButton, trigger: RemoteTrigger = .single) -> Bool {
+        overrides?.contains(trigger.mappingKey(for: button)) == false
+    }
+
+    func source(for button: RemoteButton, trigger: RemoteTrigger = .single, global: ButtonMappings) -> ButtonMappings {
+        inherits(button, trigger: trigger) ? global : buttons
+    }
+
+    func resolved(global: ButtonMappings) -> ButtonMappings {
+        guard let overrides else { return buttons }
+        var result = global
+        for trigger in RemoteTrigger.allCases {
+            for button in RemoteButton.allCases where overrides.contains(trigger.mappingKey(for: button)) {
+                result[button, trigger] = buttons[button, trigger]
+                result.setEnabled(buttons.isEnabled(button, trigger: trigger), for: button, trigger: trigger)
+            }
+        }
+        return result
+    }
+
+    mutating func edit(_ button: RemoteButton, trigger: RemoteTrigger = .single,
+                       global: ButtonMappings, _ change: (inout ButtonMappings) -> Void) {
+        if inherits(button, trigger: trigger) {
+            buttons[button, trigger] = global[button, trigger]
+            buttons.setEnabled(global.isEnabled(button, trigger: trigger), for: button, trigger: trigger)
+            overrides?.insert(trigger.mappingKey(for: button))
+        }
+        change(&buttons)
+    }
+
+    mutating func followGlobal(_ button: RemoteButton, trigger: RemoteTrigger = .single) {
+        guard overrides != nil else { return }
+        overrides?.remove(trigger.mappingKey(for: button))
+        buttons[button, trigger] = nil
+        buttons.setEnabled(true, for: button, trigger: trigger)
+    }
+}
+
+enum ScenePreset: String, CaseIterable, Identifiable {
+    case presentation, reading, webVideo
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .presentation: "演示翻页"
+        case .reading: "长文阅读"
+        case .webVideo: "网页视频"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .presentation: "用于 Keynote 和 PowerPoint 的放映模式。"
+        case .reading: "在 Safari 阅读网页，或在「预览」阅读 PDF。"
+        case .webVideo: "用于 YouTube。使用前先点一下视频播放器。"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .presentation: "rectangle.on.rectangle"
+        case .reading: "book"
+        case .webVideo: "play.rectangle"
+        }
+    }
+
+    struct Binding: Identifiable {
+        let button: RemoteButton
+        let purpose: String
+        let shortcut: KeyboardShortcut
+
+        var id: RemoteButton { button }
+        var action: RemoteAction { .keyboard(shortcut) }
+
+        init(_ button: RemoteButton, _ purpose: String, _ key: Int, _ label: String) {
+            self.button = button
+            self.purpose = purpose
+            self.shortcut = KeyboardShortcut(option: .init(id: UInt16(key), title: label), flags: [])
+        }
+    }
+
+    var bindings: [Binding] {
+        switch self {
+        case .presentation: [
+            .init(.left, "上一张", kVK_LeftArrow, "←"),
+            .init(.right, "下一张或播放下一段动画", kVK_RightArrow, "→"),
+            .init(.back, "退出放映", kVK_Escape, "Esc")
+        ]
+        case .reading: [
+            .init(.up, "向上滚动一屏", kVK_PageUp, "⇞"),
+            .init(.down, "向下滚动一屏", kVK_PageDown, "⇟")
+        ]
+        case .webVideo: [
+            .init(.select, "播放 / 暂停", kVK_ANSI_K, "K"),
+            .init(.left, "后退 10 秒", kVK_ANSI_J, "J"),
+            .init(.right, "前进 10 秒", kVK_ANSI_L, "L"),
+            .init(.down, "切换全屏", kVK_ANSI_F, "F")
+        ]
+        }
+    }
 }
 
 struct RemoteConfiguration: Codable, Equatable {
@@ -50,9 +278,25 @@ struct RemoteConfiguration: Codable, Equatable {
         return scenes.first { $0.id == id && $0.enabled }
     }
 
-    func action(for button: RemoteButton, in appID: String?) -> RemoteAction? {
-        let buttons = scene(for: appID)?.buttons ?? global
-        return buttons.isEnabled(button) ? buttons[button] : nil
+    func action(for button: RemoteButton, trigger: RemoteTrigger = .single, in appID: String?) -> RemoteAction? {
+        let buttons = scene(for: appID)?.source(for: button, trigger: trigger, global: global) ?? global
+        return buttons.isEnabled(button, trigger: trigger) ? buttons[button, trigger] : nil
+    }
+
+    mutating func apply(_ preset: ScenePreset, to id: String, name: String) {
+        let index: Int
+        if let existing = scenes.firstIndex(where: { $0.id == id }) {
+            index = existing
+        } else {
+            index = scenes.count
+            scenes.append(AppSceneMapping(id: id, name: name, buttons: ButtonMappings(), overrides: []))
+        }
+        for binding in preset.bindings {
+            scenes[index].edit(binding.button, global: global) {
+                $0[binding.button] = binding.action
+                $0.setEnabled(true, for: binding.button)
+            }
+        }
     }
 }
 

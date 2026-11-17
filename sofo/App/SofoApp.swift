@@ -68,7 +68,7 @@ final class SofoAppDelegate: NSObject, NSApplicationDelegate {
         model.refresh()
         if settingsWindow == nil {
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 1100, height: 800),
+                contentRect: NSRect(x: 0, y: 0, width: 1200, height: 720),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                 backing: .buffered,
                 defer: false
