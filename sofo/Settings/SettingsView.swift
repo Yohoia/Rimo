@@ -259,7 +259,8 @@ struct SofoSettingsView: View {
                 tab = .home
             } label: {
                 HStack(spacing: 10) {
-                    Image(nsImage: NSApplication.shared.applicationIconImage)
+                    Image("SofoBrandIcon")
+                        .renderingMode(.original)
                         .resizable()
                         .scaledToFit()
                         .frame(width: 44, height: 44)

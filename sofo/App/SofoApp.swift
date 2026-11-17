@@ -10,14 +10,9 @@ struct SofoApp: App {
         MenuBarExtra {
             SofoMenu(model: delegate.model, openSettings: delegate.showSettings)
         } label: {
-            if let icon = NSImage(named: "MenuBarIcon") {
-                Image(nsImage: icon)
-                    .renderingMode(.template)
-                    .accessibilityLabel("sofo")
-            } else {
-                Image(systemName: "appletvremote.gen4")
-                    .accessibilityLabel("sofo")
-            }
+            Image("MenuBarIcon")
+                .renderingMode(.template)
+                .accessibilityLabel("sofo")
         }
     }
 }
