@@ -508,7 +508,23 @@ struct ButtonMappingEditor: View {
                                     !searching || group.title.localizedStandardContains(query) || $0.matches(query)
                                 }
                                 VStack(spacing: 0) {
-                                    ForEach(items) { actionRow($0) }
+                                    if group == .keyboard && !searching {
+                                        actionRow(.configure(.keyboard))
+                                        actionRow(.configure(.text))
+                                        ForEach(KeyboardShortcut.keyGroups) { section in
+                                            Text(section.title)
+                                                .font(.system(size: 12, weight: .medium))
+                                                .foregroundStyle(RimoStyle.muted)
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                                .padding(.horizontal, 16)
+                                                .padding(.top, 18)
+                                                .padding(.bottom, 8)
+                                                .accessibilityAddTraits(.isHeader)
+                                            ForEach(section.keys) { actionRow(.key($0.id)) }
+                                        }
+                                    } else {
+                                        ForEach(items) { actionRow($0) }
+                                    }
                                 }
                                 .padding(.horizontal, 16)
                                 .padding(.bottom, 12)
@@ -639,12 +655,12 @@ struct ButtonMappingEditor: View {
             case .volumeDown: [.media(.volumeDown), .scroll(.down)]
             case .mute: [.media(.mute), .media(.playPause)]
             case .home: [.system(.missionControl), .system(.showDesktop), .configure(.openApp)]
-            case .select: [.key(UInt16(kVK_Return)), .mouse(.left), .key(UInt16(kVK_Space))]
+            case .select: [.key(UInt16(kVK_Return)), .key(UInt16(kVK_Space))]
             case .up: [.key(UInt16(kVK_UpArrow)), .scroll(.up), .key(UInt16(kVK_PageUp))]
             case .down: [.key(UInt16(kVK_DownArrow)), .scroll(.down), .key(UInt16(kVK_PageDown))]
             case .left: [.key(UInt16(kVK_LeftArrow)), .system(.previousDesktop), .media(.previousTrack)]
             case .right: [.key(UInt16(kVK_RightArrow)), .system(.nextDesktop), .media(.nextTrack)]
-            case .back, .menu: [.key(UInt16(kVK_Escape)), .mouse(.right), .system(.showDesktop)]
+            case .back, .menu: [.key(UInt16(kVK_Escape)), .system(.showDesktop)]
             case .power: [.system(.sleepDisplay), .system(.lockScreen)]
             case .siri: [.configure(.keyboard), .configure(.shortcut), .configure(.text)]
             }
@@ -658,7 +674,6 @@ struct ButtonMappingEditor: View {
             return result
         case .keyboard:
             return [.configure(.keyboard), .configure(.text)] + ActionChoice.presetKeyCodes.map(ActionChoice.key)
-        case .mouse: return MouseAction.allCases.map(ActionChoice.mouse)
         case .scroll: return ScrollAction.Direction.allCases.map(ActionChoice.scroll)
         case .media: return MediaAction.allCases.map(ActionChoice.media)
         case .windows:
@@ -715,7 +730,7 @@ struct ButtonMappingEditor: View {
                         .foregroundStyle(RimoStyle.muted)
                     Spacer()
                     Picker("按键动作", selection: kind) {
-                        ForEach(EditorKind.allCases) { Text($0.title).tag($0) }
+                        ForEach(EditorKind.allCases.filter { $0 != .mouse || kind.wrappedValue == .mouse }) { Text($0.title).tag($0) }
                     }
                     .labelsHidden()
                     .controlSize(.regular)
@@ -1122,13 +1137,12 @@ struct ButtonMappingEditor: View {
     }
 
     private enum ActionGroup: String, CaseIterable, Identifiable {
-        case recommended, keyboard, mouse, scroll, media, windows, system, apps
+        case recommended, keyboard, scroll, media, windows, system, apps
         var id: Self { self }
         var title: String {
             switch self {
             case .recommended: "推荐"
             case .keyboard: "键盘"
-            case .mouse: "鼠标"
             case .scroll: "滚动"
             case .media: "媒体与音量"
             case .windows: "窗口与桌面"
@@ -1141,9 +1155,7 @@ struct ButtonMappingEditor: View {
     private enum ActionChoice: Hashable, Identifiable {
         case configure(EditorKind), key(UInt16), scroll(ScrollAction.Direction), media(MediaAction), mouse(MouseAction), system(SystemAction)
 
-        static let presetKeyCodes = [kVK_Return, kVK_Escape, kVK_Space, kVK_Tab, kVK_Delete,
-                                     kVK_UpArrow, kVK_DownArrow, kVK_LeftArrow, kVK_RightArrow,
-                                     kVK_PageUp, kVK_PageDown, kVK_Home, kVK_End].map(UInt16.init)
+        static let presetKeyCodes = KeyboardShortcut.navigationKeys.map(\.id)
         var id: Self { self }
 
         var kind: EditorKind {
@@ -1177,7 +1189,9 @@ struct ButtonMappingEditor: View {
                 case kVK_Escape: "Esc / 退出"
                 case kVK_Space: "空格"
                 case kVK_Tab: "Tab / 制表键"
-                case kVK_Delete: "退格"
+                case kVK_Delete: "Delete / 退格"
+                case kVK_ForwardDelete: "Forward Delete / 向前删除"
+                case kVK_ANSI_KeypadEnter: "Enter / 小键盘回车"
                 case kVK_UpArrow: "向上方向键"
                 case kVK_DownArrow: "向下方向键"
                 case kVK_LeftArrow: "向左方向键"

@@ -32,8 +32,28 @@ struct RemoteConfigurationTest {
         try verifyPresets(globalAction: globalAction, otherAction: sceneAction)
         try verifyTriggerMappings(single: globalAction, additional: sceneAction)
         try verifyExpandedActions()
+        verifyKeyboardCatalog()
         verifyRemotePresses()
         print("Scenes, mapping persistence, HID de-duplication and trigger recognition passed.")
+    }
+
+    static func verifyKeyboardCatalog() {
+        let keys = KeyboardShortcut.navigationKeys
+        let grouped = KeyboardShortcut.keyGroups.flatMap(\.keys)
+        precondition(Set(keys.map(\.id)).count == keys.count)
+        precondition(Set(grouped.map(\.id)).count == grouped.count)
+        precondition(Set(grouped.map(\.id)) == Set(keys.map(\.id)))
+        for code in [kVK_Function, kVK_Command, kVK_RightCommand, kVK_Option, kVK_RightOption,
+                     kVK_Control, kVK_RightControl, kVK_Shift, kVK_RightShift, kVK_CapsLock,
+                     kVK_Return, kVK_Escape, kVK_ForwardDelete, kVK_F13, kVK_F20] {
+            let option = keys.first { $0.id == UInt16(code) }!
+            let shortcut = KeyboardShortcut(option: option, flags: [])
+            precondition(shortcut.keyCode == UInt16(code) && shortcut.modifiers == 0)
+            if KeyboardShortcut.modifierFlag(for: UInt16(code)) != nil {
+                precondition(shortcut.outputModifierCodes.isEmpty)
+            }
+        }
+        precondition(!keys.contains { [UInt16(kVK_ANSI_A), UInt16(kVK_ANSI_0), UInt16(kVK_ANSI_Keypad0)].contains($0.id) })
     }
 
     static func verifyPresets(globalAction: RemoteAction, otherAction: RemoteAction) throws {
