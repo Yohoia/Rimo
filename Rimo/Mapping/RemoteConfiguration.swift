@@ -98,6 +98,15 @@ enum MediaAction: String, Codable, CaseIterable, Identifiable {
 
 enum SystemAction: String, Codable, CaseIterable, Identifiable {
     case missionControl, appWindows, previousDesktop, nextDesktop, showDesktop, lockScreen, sleepDisplay
+    case copy, cut, paste, undo, redo, selectAll, find, back, forward
+    case newTab, previousTab, nextTab, zoomIn, zoomOut, resetZoom, captureScreen, screenshotTools, emoji
+
+    // Each action belongs to one browse category; recommendations may surface it again.
+    static let windowActions: [Self] = [.missionControl, .appWindows, .showDesktop, .previousDesktop, .nextDesktop]
+    static let screenActions: [Self] = [.lockScreen, .sleepDisplay]
+    static let otherActions: [Self] = [.copy, .cut, .paste, .undo, .redo, .selectAll, .find,
+        .back, .forward, .newTab, .previousTab, .nextTab, .zoomIn, .zoomOut, .resetZoom,
+        .captureScreen, .screenshotTools, .emoji]
     var id: Self { self }
     var title: String {
         switch self {
@@ -108,6 +117,24 @@ enum SystemAction: String, Codable, CaseIterable, Identifiable {
         case .showDesktop: "显示桌面"
         case .lockScreen: "锁定屏幕"
         case .sleepDisplay: "关闭显示器"
+        case .copy: "复制"
+        case .cut: "剪切"
+        case .paste: "粘贴"
+        case .undo: "撤销"
+        case .redo: "重做"
+        case .selectAll: "全选"
+        case .find: "查找"
+        case .back: "网页后退"
+        case .forward: "网页前进"
+        case .newTab: "新建标签页"
+        case .previousTab: "上一个标签页"
+        case .nextTab: "下一个标签页"
+        case .zoomIn: "放大页面"
+        case .zoomOut: "缩小页面"
+        case .resetZoom: "重置页面缩放"
+        case .captureScreen: "全屏截图"
+        case .screenshotTools: "打开截屏工具栏"
+        case .emoji: "表情与符号"
         }
     }
     var shortcut: KeyboardShortcut? {
@@ -121,6 +148,24 @@ enum SystemAction: String, Codable, CaseIterable, Identifiable {
         case .showDesktop: (key, flags) = (kVK_F11, [])
         case .lockScreen: (key, flags) = (kVK_ANSI_Q, [.control, .command])
         case .sleepDisplay: return nil
+        case .copy: (key, flags) = (kVK_ANSI_C, .command)
+        case .cut: (key, flags) = (kVK_ANSI_X, .command)
+        case .paste: (key, flags) = (kVK_ANSI_V, .command)
+        case .undo: (key, flags) = (kVK_ANSI_Z, .command)
+        case .redo: (key, flags) = (kVK_ANSI_Z, [.command, .shift])
+        case .selectAll: (key, flags) = (kVK_ANSI_A, .command)
+        case .find: (key, flags) = (kVK_ANSI_F, .command)
+        case .back: (key, flags) = (kVK_ANSI_LeftBracket, .command)
+        case .forward: (key, flags) = (kVK_ANSI_RightBracket, .command)
+        case .newTab: (key, flags) = (kVK_ANSI_T, .command)
+        case .previousTab: (key, flags) = (kVK_Tab, [.control, .shift])
+        case .nextTab: (key, flags) = (kVK_Tab, .control)
+        case .zoomIn: (key, flags) = (kVK_ANSI_Equal, [.command, .shift])
+        case .zoomOut: (key, flags) = (kVK_ANSI_Minus, .command)
+        case .resetZoom: (key, flags) = (kVK_ANSI_0, .command)
+        case .captureScreen: (key, flags) = (kVK_ANSI_3, [.command, .shift])
+        case .screenshotTools: (key, flags) = (kVK_ANSI_5, [.command, .shift])
+        case .emoji: (key, flags) = (kVK_Space, [.control, .command])
         }
         return KeyboardShortcut(option: .init(id: UInt16(key), title: title), flags: flags)
     }

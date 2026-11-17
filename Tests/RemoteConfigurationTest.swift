@@ -33,8 +33,26 @@ struct RemoteConfigurationTest {
         try verifyTriggerMappings(single: globalAction, additional: sceneAction)
         try verifyExpandedActions()
         verifyKeyboardCatalog()
+        try verifyOtherActions()
         verifyRemotePresses()
         print("Scenes, mapping persistence, HID de-duplication and trigger recognition passed.")
+    }
+
+    static func verifyOtherActions() throws {
+        let categories = SystemAction.windowActions + SystemAction.screenActions + SystemAction.otherActions
+        precondition(Set(categories).count == categories.count)
+        precondition(Set(categories) == Set(SystemAction.allCases))
+        var signatures: Set<String> = []
+        for action in SystemAction.otherActions {
+            let key = action.shortcut!
+            precondition(signatures.insert("\(key.keyCode):\(key.modifiers)").inserted)
+            let value = RemoteAction.system(action)
+            let restored = try JSONDecoder().decode(RemoteAction.self, from: JSONEncoder().encode(value))
+            precondition(restored == value)
+        }
+        precondition(SystemAction.copy.shortcut?.keyCode == UInt16(kVK_ANSI_C))
+        precondition(SystemAction.copy.shortcut?.modifiers == UInt64(NSEvent.ModifierFlags.command.rawValue))
+        precondition(SystemAction.redo.shortcut?.modifiers == UInt64(NSEvent.ModifierFlags([.command, .shift]).rawValue))
     }
 
     static func verifyKeyboardCatalog() {

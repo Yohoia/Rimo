@@ -31,6 +31,7 @@
 4. **窗口与桌面**：调度中心、App 窗口、显示桌面、前后桌面。
 5. **系统操作**：锁定屏幕、关闭显示器。
 6. **应用与快捷指令**：打开 App、运行快捷指令。
+7. **其他动作**：复制、剪切、粘贴、撤销、重做、全选、查找、网页前进/后退、新建及切换标签页、页面放大/缩小/重置、全屏截图、截屏工具栏、表情与符号。通过常见 macOS 快捷键实现，前台 App 需支持对应操作。
 
 鼠标不再作为新动作分类或推荐项；为兼容已有配置，已保存的鼠标动作仍可查看、执行和修改。
 触发方式属于侧栏顶部的单击/双击/长按选择；场景决定映射生效范围，不作为动作分类。停用某次触发保留在动作配置中。Siri 键启用收音时由收音功能接管，不开放动作编辑。
@@ -43,3 +44,9 @@
 - Voxa 本地资料：`reference/Voxa/rea-voxa/module-core/ButtonActionType.swift`、`RemoteButtonBinding.swift`、`KeyboardOutputKey.swift`。恢复的类型定义含静态推断，按键配置样本另有已记录的运行观察，不视作本次实测。
 - RemotePilot 本地资料：`reference/polit/rea-remotepilot/analysis/strings_full_remotepilot.txt` 的 `KeyAction` 字符串簇（约 31850 行）、`analysis/README.md`；字符串和符号表示静态线索，功能范围结合既有官方资料核对。
 - Rimo：[`RemoteConfiguration.swift`](../Rimo/Mapping/RemoteConfiguration.swift)、[`KeyboardShortcut.swift`](../Rimo/Mapping/KeyboardShortcut.swift)、[`ActionOutput.swift`](../Rimo/Mapping/ActionOutput.swift)、[`RimoModel.swift`](../Rimo/App/RimoModel.swift)、[`MappingView.swift`](../Rimo/Mapping/MappingView.swift)。
+
+## Options+ 其他动作适配
+
+核对本地 Options+ 2.9.1013853 编译组件 `components/app.min.js/44707/_0x32cc61.js` 的 `renderAllCardsDropDown`：标题“其他动作”对应筛选并排序后的 `allActionCards`，包含按设备能力和当前配置过滤的逻辑，并非所有设备完全相同的固定菜单。文案依据 `agent-resources/data/strings/zh-CN.yaml` 中的复制、剪切、粘贴、撤销、重做、前进/后退、新标签页、放大/缩小、缩放重置、截屏和表情符号等条目；本次未重新运行 Options+。
+
+Rimo 从中选择适合实体键触发的通用编辑、浏览和系统工具动作，并补齐全选、查找与标签页前后切换。已有的滚动、媒体、桌面、锁屏、打开 App 等保持原分类。鼠标 DPI、设备灯光、鼠标手势和 AI 动作未加入。主分类之间每个系统动作只归属一处；推荐区仍可作为当前动作的快捷入口。

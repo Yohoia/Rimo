@@ -677,8 +677,9 @@ struct ButtonMappingEditor: View {
         case .scroll: return ScrollAction.Direction.allCases.map(ActionChoice.scroll)
         case .media: return MediaAction.allCases.map(ActionChoice.media)
         case .windows:
-            return [SystemAction.missionControl, .appWindows, .showDesktop, .previousDesktop, .nextDesktop].map(ActionChoice.system)
-        case .system: return [SystemAction.lockScreen, .sleepDisplay].map(ActionChoice.system)
+            return SystemAction.windowActions.map(ActionChoice.system)
+        case .system: return SystemAction.screenActions.map(ActionChoice.system)
+        case .other: return SystemAction.otherActions.map(ActionChoice.system)
         case .apps: return [.configure(.openApp), .configure(.shortcut)]
         }
     }
@@ -930,6 +931,13 @@ struct ButtonMappingEditor: View {
         _ = model.setAction(action, for: button, trigger: trigger, sceneID: sceneID)
     }
 
+    private var systemChoices: [SystemAction] {
+        guard inSidebar, case .system(let current) = action else { return SystemAction.allCases }
+        if SystemAction.otherActions.contains(current) { return SystemAction.otherActions }
+        if SystemAction.windowActions.contains(current) { return SystemAction.windowActions }
+        return SystemAction.screenActions
+    }
+
     @ViewBuilder private var additionalFields: some View {
         switch kind.wrappedValue {
         case .keyboard: EmptyView()
@@ -974,10 +982,12 @@ struct ButtonMappingEditor: View {
                 if case .system(let value) = action { return Optional(value) }; return nil
             }, set: { if let value = $0 { save(.system(value)) } })) {
                 Text("选择系统操作").tag(nil as SystemAction?)
-                ForEach(SystemAction.allCases) { Text($0.title).tag(Optional($0)) }
+                ForEach(systemChoices) { Text($0.title).tag(Optional($0)) }
             }
             .labelsHidden()
-            hint("窗口和桌面操作使用 macOS 默认快捷键，请保持系统快捷键已启用。")
+            hint(SystemAction.otherActions.contains { action == .system($0) }
+                 ? "使用 macOS 常用快捷键，作用于前台 App；应用需支持对应操作。截屏与表情使用系统快捷键。"
+                 : "窗口和桌面操作使用 macOS 默认快捷键，请保持系统快捷键已启用。")
         case .openApp:
             if case .openApp(let app) = action {
                 Label(app.name, systemImage: "app").font(RimoStyle.title)
@@ -1137,7 +1147,7 @@ struct ButtonMappingEditor: View {
     }
 
     private enum ActionGroup: String, CaseIterable, Identifiable {
-        case recommended, keyboard, scroll, media, windows, system, apps
+        case recommended, keyboard, scroll, media, windows, system, apps, other
         var id: Self { self }
         var title: String {
             switch self {
@@ -1148,6 +1158,7 @@ struct ButtonMappingEditor: View {
             case .windows: "窗口与桌面"
             case .system: "系统操作"
             case .apps: "应用与快捷指令"
+            case .other: "其他动作"
             }
         }
     }
