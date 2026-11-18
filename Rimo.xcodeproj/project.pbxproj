@@ -77,6 +77,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Rimo;
+                INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Rimo 需要蓝牙权限来访问遥控器设备。";
 				PRODUCT_BUNDLE_IDENTIFIER = cn.yohoia.rimo;
 				PRODUCT_NAME = Rimo;
 				MARKETING_VERSION = 0.1.0;
@@ -98,6 +99,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Rimo;
+                INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Rimo 需要蓝牙权限来访问遥控器设备。";
 				PRODUCT_BUNDLE_IDENTIFIER = cn.yohoia.rimo;
 				PRODUCT_NAME = Rimo;
 				MARKETING_VERSION = 0.1.0;

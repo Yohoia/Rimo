@@ -92,13 +92,10 @@ struct ScenesPage: View {
         }) { item in
             switch item {
             case .add:
-                AppScenePicker(excluded: Set(model.configuration.scenes.map(\.id))) { app in
+                AppScenePicker(model: model) { apps in
                     feedback = nil
-                    if model.addScene(id: app.id, name: app.name) {
-                        editAfterDismissal = model.scene(app.id)
-                    } else {
-                        feedback = .init(title: model.configurationError ?? "这个 App 已有场景。", isError: true)
-                    }
+                    editAfterDismissal = apps.first.flatMap { model.scene($0.id) }
+                    sheet = nil
                 }
             case .presets:
                 ScenePresetPicker(model: model) { preset, app in
@@ -199,53 +196,253 @@ struct ScenesPage: View {
 
 struct AppScenePicker: View {
     @Environment(\.dismiss) private var dismiss
-    let excluded: Set<String>
-    let onSelect: (SceneTargetApp) -> Void
-    @State private var invalid = false
-    @State private var browsing = false
+    @ObservedObject var model: RimoModel
+    let onAdded: ([SceneTargetApp]) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 15) {
-            Text("添加场景").font(RimoStyle.heading).tracking(RimoStyle.headingTracking)
-            Text("选择一个正在运行的 App，或从应用程序文件夹中选择。")
-                .font(RimoStyle.prose)
-                .foregroundStyle(RimoStyle.muted)
-            SceneAppList(excluded: excluded, onSelect: select).frame(height: 220)
-            HStack {
-                Button("浏览应用程序…") { browsing = true }
-                Spacer()
-                Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
-            }
-            if invalid { Label("请选择一个还没有场景的 Mac App。", systemImage: "exclamationmark.triangle") }
-        }
-        .padding(22)
-        .frame(width: 460)
-        .background(RimoStyle.canvas)
-        .foregroundStyle(RimoStyle.ink)
-        .buttonStyle(RimoButtonStyle())
-        .fileImporter(isPresented: $browsing, allowedContentTypes: [.applicationBundle]) { result in
-            guard case .success(let url) = result else { return }
-            guard let app = SceneTargetApp(url: url), !excluded.contains(app.id) else {
-                invalid = true
-                return
-            }
-            select(app)
-        }
-    }
-
-    private func select(_ app: SceneTargetApp) {
-        onSelect(app)
-        dismiss()
+        AppSelectionSidebar(model: model, close: { dismiss() }, onAdded: onAdded)
+            .frame(width: 460, height: 620)
     }
 }
 
-struct SceneTargetApp: Identifiable {
+struct AppSelectionSidebar: View {
+    @ObservedObject var model: RimoModel
+    let close: () -> Void
+    var showsSelectionSummary = true
+    var onSelectionChange: ([SceneTargetApp]) -> Void = { _ in }
+    let onAdded: ([SceneTargetApp]) -> Void
+    @State private var applications: [SceneTargetApp] = []
+    @State private var selected: Set<String> = []
+    @State private var browsing = false
+    @State private var loading = true
+    @State private var error: String?
+
+    private var selectedApps: [SceneTargetApp] { applications.filter { selected.contains($0.id) } }
+    private var existing: Set<String> { Set(model.configuration.scenes.map(\.id)) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("选择应用程序")
+                    .font(.system(size: 20, weight: .medium))
+                    .accessibilityAddTraits(.isHeader)
+                Text("为常用应用程序自定义按钮，提高效率。")
+                    .foregroundStyle(RimoStyle.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 32)
+            .padding(.vertical, 28)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RimoStyle.actionSidebarHeader)
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 18) {
+                        selectionMark(checked: true)
+                        Image(systemName: "circle.grid.2x2").font(.system(size: 24))
+                            .frame(width: 30)
+                        Text("全局设置")
+                    }
+                    .foregroundStyle(RimoStyle.muted)
+                    .padding(.horizontal, 32)
+                    .frame(height: 78)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("全局设置，始终可用")
+
+                    if loading {
+                        ProgressView("正在读取应用程序…")
+                            .frame(maxWidth: .infinity).padding(32)
+                    } else {
+                        ForEach(applications) { app in applicationRow(app) }
+                        Button("添加其他应用程序") { browsing = true }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(RimoStyle.actionConfigurationLink)
+                            .padding(32)
+                    }
+                }
+            }
+            if let error {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(RimoStyle.label)
+                    .padding(.horizontal, 32).padding(.vertical, 12)
+            }
+            VStack(spacing: 12) {
+                if !selected.isEmpty {
+                    if showsSelectionSummary {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 12) {
+                                ForEach(selectedApps) { app in
+                                    SceneAppIcon(id: app.id, size: 30)
+                                        .accessibilityHidden(false)
+                                        .accessibilityLabel(app.name)
+                                        .help(app.name)
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                        .frame(height: 38)
+                        .accessibilityElement(children: .contain)
+                        .accessibilityLabel("已选择的应用程序")
+                    }
+                    if !model.configuration.automatic {
+                        Text("添加后可在「场景」中开启自动切换。")
+                            .font(RimoStyle.label)
+                            .foregroundStyle(RimoStyle.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Button(action: save) { Text("确认").frame(maxWidth: .infinity) }
+                        .buttonStyle(RimoButtonStyle(primary: true))
+                        .keyboardShortcut(.defaultAction)
+                }
+                Button(action: close) {
+                    Text(selected.isEmpty ? "取消" : "放弃").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(RimoButtonStyle())
+                .keyboardShortcut(.cancelAction)
+            }
+            .padding(32)
+            .background(RimoStyle.surface)
+        }
+        .background(RimoStyle.surface)
+        .foregroundStyle(RimoStyle.ink)
+        .font(RimoStyle.body)
+        .onChange(of: selectedApps.map(\.id)) { _ in onSelectionChange(selectedApps) }
+        .task {
+            var discovered = await Task.detached(priority: .userInitiated) { SceneTargetApp.installedApplications() }.value
+            let knownIDs = ["com.apple.Safari", "com.google.Chrome", "com.apple.iWork.Keynote",
+                            "com.microsoft.Powerpoint", "com.apple.Preview", "org.mozilla.firefox", "com.microsoft.edgemac"]
+            let urls = knownIDs.compactMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }
+                + NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }.compactMap(\.bundleURL)
+            for url in urls {
+                if let app = SceneTargetApp(url: url), app.isListedByDefault,
+                   !discovered.contains(where: { $0.id == app.id }) {
+                    discovered.append(app)
+                }
+            }
+            applications = discovered.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            loading = false
+        }
+        .fileImporter(isPresented: $browsing, allowedContentTypes: [.applicationBundle]) { result in
+            switch result {
+            case .success(let url):
+                guard let app = SceneTargetApp(url: url), !existing.contains(app.id) else {
+                    error = "请选择一个还没有场景的 Mac App。"
+                    return
+                }
+                if !applications.contains(where: { $0.id == app.id }) {
+                    applications.append(app)
+                    applications.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+                }
+                selected.insert(app.id)
+                error = nil
+            case .failure(let failure):
+                error = "无法打开应用程序，请重试。\(failure.localizedDescription)"
+            }
+        }
+    }
+
+    private func applicationRow(_ app: SceneTargetApp) -> some View {
+        let added = existing.contains(app.id)
+        let checked = added || selected.contains(app.id)
+        return Button {
+            if !selected.insert(app.id).inserted { selected.remove(app.id) }
+            error = nil
+        } label: {
+            HStack(spacing: 18) {
+                selectionMark(checked: checked)
+                SceneAppIcon(id: app.id, size: 30)
+                Text(app.name).lineLimit(1)
+                Spacer(minLength: 0)
+                if added {
+                    Text("已添加").font(RimoStyle.caption).foregroundStyle(RimoStyle.muted)
+                }
+            }
+            .padding(.horizontal, 32)
+            .frame(minHeight: 48)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(added)
+        .accessibilityLabel(app.name + (added ? "，已添加" : ""))
+        .accessibilityAddTraits(checked ? .isSelected : [])
+    }
+
+    private func selectionMark(checked: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 3)
+            .fill(checked ? RimoStyle.action : RimoStyle.actionRadio)
+            .frame(width: 18, height: 18)
+            .overlay {
+                if checked {
+                    Image(systemName: "checkmark").font(.system(size: 11, weight: .bold)).foregroundStyle(.white)
+                }
+            }
+            .accessibilityHidden(true)
+    }
+
+    private func save() {
+        let apps = applications.filter { selected.contains($0.id) && !existing.contains($0.id) }
+        let selections = apps.map { app in
+            (id: app.id, name: app.name, preset: app.availablePresets.first)
+        }
+        guard model.addScenes(selections) else {
+            error = model.configurationError ?? "未能添加应用程序，请重试。"
+            return
+        }
+        onAdded(apps)
+    }
+}
+
+struct SceneTargetApp: Identifiable, Sendable {
     let id: String
     let name: String
 
     init(id: String, name: String) {
         self.id = id
         self.name = name
+    }
+
+    var isListedByDefault: Bool {
+        guard id.lowercased().hasPrefix("com.apple.") else { return true }
+        return Self.commonSystemAppIDs.contains(id.lowercased())
+    }
+
+    private static let commonSystemAppIDs: Set<String> = [
+        "com.apple.safari", "com.apple.preview", "com.apple.ibooksx",
+        "com.apple.music", "com.apple.quicktimeplayerx", "com.apple.tv", "com.apple.podcasts",
+        "com.apple.photos", "com.apple.finder", "com.apple.notes", "com.apple.terminal"
+    ]
+
+    var availablePresets: [ScenePreset] {
+        switch id.lowercased() {
+        case "com.apple.iwork.keynote", "com.microsoft.powerpoint": [.presentation]
+        case "com.apple.safari", "com.google.chrome", "org.mozilla.firefox", "com.microsoft.edgemac": [.reading, .webVideo]
+        case "com.apple.preview": [.reading]
+        default: []
+        }
+    }
+
+    static func installedApplications() -> [SceneTargetApp] {
+        let manager = FileManager.default
+        let directories = [URL(fileURLWithPath: "/Applications"),
+                           manager.homeDirectoryForCurrentUser.appendingPathComponent("Applications"),
+                           URL(fileURLWithPath: "/System/Applications"),
+                           URL(fileURLWithPath: "/System/Library/CoreServices/Finder.app")]
+        var applications: [String: SceneTargetApp] = [:]
+        for directory in directories {
+            if directory.pathExtension == "app", let app = SceneTargetApp(url: directory) {
+                if app.isListedByDefault { applications[app.id] = app }
+                continue
+            }
+            guard let enumerator = manager.enumerator(at: directory, includingPropertiesForKeys: [.isDirectoryKey],
+                                                     options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { continue }
+            for case let url as URL in enumerator where url.pathExtension == "app" {
+                guard let app = SceneTargetApp(url: url), app.isListedByDefault,
+                      applications[app.id] == nil else { continue }
+                applications[app.id] = app
+            }
+        }
+        return applications.values.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
     init?(url: URL) {
@@ -331,7 +528,7 @@ private struct ScenePresetPicker: View {
                 }
                 VStack(alignment: .leading, spacing: 12) {
                     Text(preset.detail).font(RimoStyle.prose).foregroundStyle(RimoStyle.muted)
-                    bindings()
+                    ScrollView { bindings() }.frame(height: 300)
                 }
                 .frame(minHeight: 190, alignment: .top)
                 HStack {
@@ -363,14 +560,12 @@ private struct ScenePresetPicker: View {
                     }
                     Spacer()
                 }
-                bindings(comparingWith: existing?.resolved(global: model.configuration.global) ?? model.configuration.global,
-                         scene: existing)
+                ScrollView {
+                    bindings(comparingWith: existing?.resolved(global: model.configuration.global) ?? model.configuration.global,
+                             scene: existing)
+                }.frame(height: 260)
                 VStack(alignment: .leading, spacing: 5) {
-                    if existing == nil {
-                        Text("未列出的按键跟随全局映射。")
-                    } else {
-                        Text("只替换并启用上面列出的按键；其余按键保持原样。")
-                    }
+                    Text("为全部实体按键设置单击映射。双击和长按可独立配置。")
                     if preset == .webVideo {
                         Text("如果选择浏览器，场景会对它的所有标签页生效。")
                     }
@@ -439,7 +634,7 @@ private struct ScenePresetPicker: View {
                             }
                         }
                         Spacer()
-                        RimoKeycap(title: binding.shortcut.title)
+                        RimoKeycap(title: binding.action.title)
                     }
                     .font(RimoStyle.body)
                     .padding(.horizontal, 14)
@@ -536,7 +731,7 @@ private struct SceneEditor: View {
                 if let selected {
                     ScrollView {
                         ButtonMappingEditor(model: model, button: selected, sceneID: sceneID,
-                                            close: { self.selected = nil }, openShortcuts: { model.loadShortcuts(force: true) })
+                                            close: { self.selected = nil })
                             .id(selected)
                             .padding(2)
                     }
@@ -568,7 +763,7 @@ private struct SceneEditor: View {
     }
 }
 
-private struct SceneAppIcon: View {
+struct SceneAppIcon: View {
     let id: String
     var size: CGFloat = 31
 

@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import CoreBluetooth
 import IOKit.hid
 
 @MainActor
@@ -7,6 +8,12 @@ final class RimoModel: ObservableObject {
     @Published private(set) var status: HIDMonitor.Status = .stopped
     @Published private(set) var isRemoteConnected = false
     @Published private(set) var batteryPercent: Int?
+    @Published private(set) var deviceInformation: HIDMonitor.DeviceInformation?
+    @Published private(set) var remoteAddress: String?
+    @Published private(set) var bluetoothAuthorization = CBManagerAuthorization.notDetermined
+    @Published private(set) var permissionStatusLoaded = false
+    @Published private(set) var permissionOnboardingCompleted = false
+    @Published private(set) var setupWelcomeCompleted = false
     @Published private(set) var canListen = false
     @Published private(set) var canPost = false
     @Published private(set) var lastButton: RemoteButton?
@@ -27,6 +34,8 @@ final class RimoModel: ObservableObject {
     @Published private(set) var shortcutFeedback: String?
     var isSettingsFocused: () -> Bool = { false }
 
+    private var permissionRefresh: Task<Void, Never>?
+    private lazy var bluetoothRequest = BluetoothPermissionRequest { [weak self] in self?.refresh() }
     private let hid = HIDMonitor()
     let voice = VoiceController()
     private var voiceChanges: AnyCancellable?
@@ -49,6 +58,8 @@ final class RimoModel: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        permissionOnboardingCompleted = defaults.bool(forKey: "device-setup-completed-v3")
+        setupWelcomeCompleted = defaults.bool(forKey: "setup-welcome-completed-v1")
         // Import existing mappings once when upgrading from the former bundle ID.
         // Keep these legacy identifiers so renaming the app does not reset settings.
         if defaults === UserDefaults.standard,
@@ -101,6 +112,9 @@ final class RimoModel: ObservableObject {
             self?.scrollMode.reset()
         }
         voiceChanges = voice.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        var completed = configuration
+        completed.completeSceneMappings()
+        if completed != configuration { _ = updateConfiguration { $0 = completed } }
         refresh()
         connectionTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshConnection() }
@@ -122,20 +136,80 @@ final class RimoModel: ObservableObject {
     }
 
     func refresh() {
-        canListen = IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted
-        canPost = CGPreflightPostEventAccess()
         refreshConnection()
+        refreshPermissions()
+    }
 
-        if canListen {
-            hid.start()
-        } else {
-            hid.stop()
+    func refreshPermissions() {
+        guard permissionRefresh == nil else { return }
+        permissionRefresh = Task { [weak self] in
+            // Permission checks can block on tccd while System Settings applies a change.
+            let snapshot = await Task.detached(priority: .userInitiated) {
+                PermissionSnapshot(bluetooth: CBManager.authorization.rawValue,
+                                   inputMonitoring: IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted,
+                                   accessibility: AXIsProcessTrusted())
+            }.value
+            guard let self, !Task.isCancelled else { return }
+            self.bluetoothAuthorization = CBManagerAuthorization(rawValue: snapshot.bluetooth) ?? .notDetermined
+            self.canListen = snapshot.inputMonitoring
+            self.canPost = snapshot.accessibility
+            self.permissionStatusLoaded = true
+            self.permissionRefresh = nil
+            if self.canListen { self.hid.start() }
+            else { self.hid.stop() }
         }
+    }
+
+    func isPermissionGranted(_ permission: RimoPermission) -> Bool {
+        switch permission {
+        case .bluetooth: bluetoothAuthorization == .allowedAlways
+        case .inputMonitoring: canListen
+        case .accessibility: canPost
+        }
+    }
+
+    func requestPermission(_ permission: RimoPermission) {
+        switch permission {
+        case .bluetooth:
+            if bluetoothAuthorization == .notDetermined { bluetoothRequest.start() }
+            else { openPermissionSettings(permission) }
+        case .inputMonitoring:
+            requestInputAccess()
+            openPermissionSettings(permission)
+        case .accessibility:
+            requestOutputAccess()
+            openPermissionSettings(permission)
+        }
+    }
+
+    func openPermissionSettings(_ permission: RimoPermission) {
+        if let url = URL(string: permission.settingsURL) { NSWorkspace.shared.open(url) }
+    }
+
+    func beginSetup() {
+        setupWelcomeCompleted = true
+        defaults.set(true, forKey: "setup-welcome-completed-v1")
+    }
+
+    var setupPermission: RimoPermission? {
+        guard let saved = defaults.string(forKey: "setup-permission-v1") else { return .accessibility }
+        return RimoPermission(rawValue: saved)
+    }
+
+    func rememberSetupPermission(_ permission: RimoPermission?) {
+        defaults.set(permission?.rawValue ?? "pairing", forKey: "setup-permission-v1")
+    }
+
+    func finishPermissionOnboarding() {
+        permissionOnboardingCompleted = true
+        defaults.set(true, forKey: "device-setup-completed-v3")
     }
 
     private func refreshConnection() {
         let addresses = HIDMonitor.connectedRemoteAddresses()
         isRemoteConnected = !addresses.isEmpty
+        remoteAddress = addresses.count == 1 ? addresses.first : nil
+        deviceInformation = remoteAddress.flatMap { HIDMonitor.deviceInformation(address: $0) }
         if addresses.count != 1 { batteryPercent = nil }
         else if let percent = HIDMonitor.batteryPercentage() { batteryPercent = percent }
         if addresses.count == 1 { voice.setAddress(addresses.first) }
@@ -147,11 +221,13 @@ final class RimoModel: ObservableObject {
     }
 
     func requestOutputAccess() {
-        _ = CGRequestPostEventAccess()
+        _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
         refresh()
     }
 
     func stop() {
+        permissionRefresh?.cancel()
+        permissionRefresh = nil
         cancelPendingPresses()
         connectionTimer?.invalidate()
         connectionTimer = nil
@@ -199,7 +275,25 @@ final class RimoModel: ObservableObject {
     @discardableResult
     func addScene(id: String, name: String) -> Bool {
         guard scene(id) == nil else { return false }
-        return updateConfiguration { $0.scenes.append(AppSceneMapping(id: id, name: name, buttons: $0.global)) }
+        return updateConfiguration {
+            $0.scenes.append(AppSceneMapping(id: id, name: name, buttons: $0.global))
+            $0.completeSceneMappings()
+        }
+    }
+
+    func addScenes(_ applications: [(id: String, name: String, preset: ScenePreset?)]) -> Bool {
+        guard !applications.isEmpty else { return false }
+        return updateConfiguration { configuration in
+            for selection in applications where !configuration.scenes.contains(where: { $0.id == selection.id }) {
+                if let preset = selection.preset {
+                    configuration.apply(preset, to: selection.id, name: selection.name)
+                } else {
+                    configuration.scenes.append(AppSceneMapping(id: selection.id, name: selection.name,
+                                                               buttons: configuration.global))
+                }
+            }
+            configuration.completeSceneMappings()
+        }
     }
 
     func applyPreset(_ preset: ScenePreset, id: String, name: String) -> Bool {
@@ -400,5 +494,70 @@ final class RimoModel: ObservableObject {
         }
         do { try ActionOutput.perform(action) }
         catch { actionError = error.localizedDescription; canPost = CGPreflightPostEventAccess() }
+    }
+}
+
+private struct PermissionSnapshot: Sendable {
+    let bluetooth: Int
+    let inputMonitoring: Bool
+    let accessibility: Bool
+}
+
+@MainActor
+private final class BluetoothPermissionRequest: NSObject, CBCentralManagerDelegate {
+    private var manager: CBCentralManager?
+    private let changed: () -> Void
+
+    init(changed: @escaping () -> Void) {
+        self.changed = changed
+        super.init()
+    }
+
+    func start() {
+        manager = CBCentralManager(delegate: self, queue: .main,
+                                   options: [CBCentralManagerOptionShowPowerAlertKey: false])
+    }
+
+    nonisolated func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        Task { @MainActor [weak self] in self?.changed() }
+    }
+}
+
+enum RimoPermission: String, CaseIterable, Identifiable {
+    case accessibility, inputMonitoring, bluetooth
+
+    var id: Self { self }
+    var title: String {
+        switch self {
+        case .bluetooth: "蓝牙"
+        case .inputMonitoring: "输入监控"
+        case .accessibility: "辅助功能"
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .bluetooth: "antenna.radiowaves.left.and.right"
+        case .inputMonitoring: "keyboard"
+        case .accessibility: "accessibility"
+        }
+    }
+    var purpose: String {
+        switch self {
+        case .bluetooth: "允许 Rimo 访问蓝牙设备。"
+        case .inputMonitoring: "允许 Rimo 读取遥控器按键。"
+        case .accessibility: "允许 Rimo 向当前应用程序发送按键和快捷键。"
+        }
+    }
+    var instructions: String {
+        "在系统设置的“隐私与安全性”中打开“\(title)”，找到 Rimo 并开启权限。"
+    }
+    var settingsURL: String {
+        let pane: String
+        switch self {
+        case .bluetooth: pane = "Privacy_Bluetooth"
+        case .inputMonitoring: pane = "Privacy_ListenEvent"
+        case .accessibility: pane = "Privacy_Accessibility"
+        }
+        return "x-apple.systempreferences:com.apple.preference.security?\(pane)"
     }
 }

@@ -1,102 +1,549 @@
 import SwiftUI
 
+enum DeviceSettingsStyle {
+    static let heading = Font.system(size: 14, weight: .bold)
+    static let title = Font.system(size: 16)
+    static let body = Font.system(size: 14)
+    static let text = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 251 / 255, green: 251 / 255, blue: 251 / 255, alpha: 1)
+            : NSColor(srgbRed: 34 / 255, green: 36 / 255, blue: 37 / 255, alpha: 1)
+    })
+    static let sectionText = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(white: 0.8, alpha: 1)
+            : NSColor(srgbRed: 34 / 255, green: 36 / 255, blue: 37 / 255, alpha: 0.4)
+    })
+    static let action = RimoStyle.assignmentAccent
+}
+
+struct DeviceSettingsLinkStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 14, weight: .bold))
+            .foregroundStyle(DeviceSettingsStyle.action)
+            .opacity(configuration.isPressed ? 0.7 : 1)
+            .frame(minHeight: 20, alignment: .leading)
+            .contentShape(Rectangle())
+    }
+}
+
 struct DevicePage: View {
     @ObservedObject var model: RimoModel
+    let openPermissionGuide: () -> Void
 
     var body: some View {
-        SettingsScroll {
-            Text("设备设置").font(RimoStyle.heading)
-                .tracking(RimoStyle.headingTracking)
-                .accessibilityAddTraits(.isHeader)
-
-            SettingsCard {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Label("Siri Remote", systemImage: "appletvremote.gen4")
-                            .font(RimoStyle.title)
-                        Spacer()
-                        Button("重新检测") { model.retry() }
-                    }
-                    HStack(spacing: 6) {
-                        RimoConnectionMark(connected: model.isRemoteConnected)
-                        Text(model.statusTitle).font(RimoStyle.label).foregroundStyle(RimoStyle.muted)
-                    }
-                    Text("在 macOS 的蓝牙设置中连接 A2540。")
-                        .font(RimoStyle.prose)
-                        .foregroundStyle(RimoStyle.muted)
-                    if let url = URL(string: "x-apple.systempreferences:com.apple.BluetoothSettings") {
-                        RimoInlineLink(title: "打开蓝牙设置", destination: url)
-                    }
-                }
-                .padding(RimoStyle.cardPadding)
-            }
-
-            SettingsCard {
-                VStack(alignment: .leading, spacing: 13) {
-                    Label("系统权限", systemImage: "lock.shield").font(RimoStyle.title)
-                    permissionRow("输入监控", detail: "读取遥控器按键", allowed: model.canListen,
-                                  request: model.requestInputAccess, pane: "Privacy_ListenEvent")
-                    RimoDivider()
-                    permissionRow("辅助功能", detail: "发送键盘快捷键", allowed: model.canPost,
-                                  request: model.requestOutputAccess, pane: "Privacy_Accessibility")
-                }
-                .padding(RimoStyle.cardPadding)
-            }
-
-            SettingsCard { VoiceView(voice: model.voice).padding(RimoStyle.cardPadding) }
-
-            SettingsCard {
-                DisclosureGroup("按键诊断") {
-                    VStack(alignment: .leading, spacing: 7) {
-                        Text(model.inputStatusTitle)
-                        Text("当前监听模式会保留系统原按键动作。")
-                            .foregroundStyle(RimoStyle.muted)
-                        if let last = model.lastButton { Text("最近收到：\(last.title)") }
-                        if case .failed(let result) = model.status {
-                            Text("HID 打开失败：\(String(format: "0x%08X", UInt32(bitPattern: result)))")
+        GeometryReader { geometry in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 30) {
+                    settingsSection("关于", contentSpacing: 16) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack(spacing: 12) {
+                                Text("Apple TV Siri Remote")
+                                    .font(DeviceSettingsStyle.title)
+                                Spacer(minLength: 16)
+                                HStack(spacing: 7) {
+                                    Circle()
+                                        .fill(model.isRemoteConnected ? RimoStyle.success : RimoStyle.muted)
+                                        .frame(width: 7, height: 7)
+                                        .accessibilityHidden(true)
+                                    Text(model.isRemoteConnected ? "已连接" : "未连接")
+                                        .fixedSize()
+                                }
+                            }
+                            VStack(alignment: .leading, spacing: 12) {
+                                deviceInformationRow("型号", value: A2540Input.modelName)
+                                deviceInformationRow("制造商", value: model.deviceInformation?.manufacturer)
+                                deviceInformationRow("设备编号", value: deviceIdentifier)
+                                deviceInformationRow("蓝牙地址", value: model.remoteAddress?.uppercased())
+                            }
+                            .padding(.top, 8)
                         }
-                        if let diagnostic = model.diagnostic { Text(diagnostic).font(RimoStyle.caption) }
-                        if let report = model.buttonReport { Text(report).font(RimoStyle.caption) }
                     }
-                    .textSelection(.enabled)
-                    .padding(.top, 10)
-                }
-                .padding(RimoStyle.cardPadding)
-            }
 
-            if let source = URL(string: "https://sketchfab.com/3d-models/apple-tv-4k-3rdgen-wifi-siri-remote-3rdgen-44ce2c6bdf2846ccbf1157b4f0aa1fa3"),
-               let license = URL(string: "https://creativecommons.org/licenses/by/4.0/") {
-                HStack(spacing: 5) {
-                    Text("3D 模型：")
-                    RimoInlineLink(title: "polyman", destination: source)
-                    Text("·")
-                    RimoInlineLink(title: "CC BY 4.0", destination: license)
+                    settingsSection("通用") {
+                        VStack(alignment: .leading, spacing: 30) {
+                            ForEach(RimoPermission.allCases) { permission in
+                                permissionRow(permission)
+                            }
+                            Button("重新查看设置引导", action: openPermissionGuide)
+                        }
+                    }
+
+                    settingsSection("语音") {
+                        VoiceView(voice: model.voice)
+                    }
+
+                    settingsSection("其他") {
+                        VStack(alignment: .leading, spacing: 28) {
+                            DisclosureGroup("按键诊断") {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text(model.inputStatusTitle)
+                                    Text("当前监听模式会保留系统原按键动作。")
+                                        .foregroundStyle(DeviceSettingsStyle.text)
+                                    if let last = model.lastButton { Text("最近收到\(last.title)") }
+                                    if case .failed(let result) = model.status {
+                                        Text("HID 打开失败 \(String(format: "0x%08X", UInt32(bitPattern: result)))")
+                                    }
+                                    if let diagnostic = model.diagnostic { Text(diagnostic).font(DeviceSettingsStyle.body) }
+                                    if let report = model.buttonReport { Text(report).font(DeviceSettingsStyle.body) }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                                .padding(.top, 12)
+                            }
+                            if let source = URL(string: "https://sketchfab.com/3d-models/apple-tv-4k-3rdgen-wifi-siri-remote-3rdgen-44ce2c6bdf2846ccbf1157b4f0aa1fa3"),
+                               let license = URL(string: "https://creativecommons.org/licenses/by/4.0/") {
+                                VStack(alignment: .leading, spacing: 12) {
+                                    Text("3D 模型").font(DeviceSettingsStyle.title)
+                                    HStack(spacing: 6) {
+                                        Link("polyman", destination: source).foregroundStyle(DeviceSettingsStyle.action)
+                                        Text("·").foregroundStyle(DeviceSettingsStyle.text)
+                                        Link("CC BY 4.0", destination: license).foregroundStyle(DeviceSettingsStyle.action)
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
-                .font(RimoStyle.caption)
-                .foregroundStyle(RimoStyle.muted)
+                // Options+ uses a 540-point panel in the right 70% of the window,
+                // with 6% outer margin and 40 points of content padding.
+                .frame(width: min(500, geometry.size.width - 280), alignment: .leading)
+                .padding(.top, 54)
+                .padding(.bottom, 48)
+                .padding(.trailing, trailingInset(in: geometry.size.width))
+                .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+            .buttonStyle(DeviceSettingsLinkStyle())
+            .font(DeviceSettingsStyle.body)
+            .lineSpacing(3)
+            .foregroundStyle(DeviceSettingsStyle.text)
+            .tint(DeviceSettingsStyle.action)
+        }
+    }
+
+    private var deviceIdentifier: String? {
+        guard let information = model.deviceInformation,
+              let vendor = information.vendorID, let product = information.productID else { return nil }
+        return String(format: "VID %04X · PID %04X", vendor, product)
+    }
+
+    @ViewBuilder private func deviceInformationRow(_ title: String, value: String?) -> some View {
+        if let value, !value.isEmpty {
+            HStack(alignment: .firstTextBaseline, spacing: 16) {
+                Text(title).frame(width: 72, alignment: .leading)
+                Text(value)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
 
-    private func permissionRow(
-        _ title: String, detail: String, allowed: Bool,
-        request: @escaping () -> Void, pane: String
+    private func trailingInset(in width: CGFloat) -> CGFloat {
+        // The 900–1300 breakpoint adds 12% left padding to the centered panel.
+        let breakpointInset = (900...1300).contains(width) ? width * 0.06 : 0
+        let settingsRegionWidth = width * 0.7
+        let panelWidth: CGFloat = 540
+        let panelMargin = settingsRegionWidth * 0.06
+        let centeredMargin = (settingsRegionWidth - panelWidth + panelMargin) / 2
+        return max(40, centeredMargin + 40 - breakpointInset)
+    }
+
+    private func settingsSection<Content: View>(
+        _ title: String, contentSpacing: CGFloat = 30, @ViewBuilder content: () -> Content
     ) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).fontWeight(.medium)
-                Text(detail).foregroundStyle(RimoStyle.muted)
+        VStack(alignment: .leading, spacing: contentSpacing) {
+            Text(title)
+                .font(DeviceSettingsStyle.heading)
+                .foregroundStyle(DeviceSettingsStyle.sectionText)
+                .accessibilityAddTraits(.isHeader)
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func permissionRow(_ permission: RimoPermission) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(permission.title).font(DeviceSettingsStyle.title)
+                Spacer()
+                Label(model.isPermissionGranted(permission) ? "已允许" : "未授权",
+                      systemImage: model.isPermissionGranted(permission) ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(model.isPermissionGranted(permission) ? RimoStyle.success : DeviceSettingsStyle.text)
             }
-            Spacer()
-            if allowed {
-                Label("已允许", systemImage: "checkmark.circle").foregroundStyle(RimoStyle.muted)
+            Text(permission.purpose)
+            Button(model.isPermissionGranted(permission) ? "打开系统设置" : "授予\(permission.title)权限") {
+                if model.isPermissionGranted(permission) { model.openPermissionSettings(permission) }
+                else { model.requestPermission(permission) }
+            }
+            .accessibilityLabel("\(permission.title)，\(model.isPermissionGranted(permission) ? "打开系统设置" : "授予权限")")
+        }
+    }
+}
+
+struct PermissionOnboardingView: View {
+    @ObservedObject var model: RimoModel
+    var startWithDevice = false
+    let close: () -> Void
+    @State private var showingWelcome = true
+    @State private var permission: RimoPermission? = .accessibility
+    @State private var showingHelp = false
+    @State private var initialized = false
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var granted: Bool { permission.map(model.isPermissionGranted) ?? false }
+
+    var body: some View {
+        Group {
+            if showingWelcome {
+                welcome
+            } else if let permission {
+                permissionPage(permission)
             } else {
-                Button("启用\(title)", action: request)
-                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") {
-                    RimoInlineLink(title: "系统设置", destination: url)
-                        .accessibilityLabel("打开\(title)的系统设置")
+                RemotePairingView(model: model, completesExistingConnection: !startWithDevice, close: {
+                    if startWithDevice || model.permissionOnboardingCompleted { close() }
+                    else { showingWelcome = true }
+                }, connected: {
+                    model.finishPermissionOnboarding()
+                    close()
+                })
+            }
+        }
+        .background(RimoStyle.canvas)
+        .foregroundStyle(RimoStyle.ink)
+        .onChange(of: permission) { next in
+            showingHelp = false
+            if !startWithDevice { model.rememberSetupPermission(next) }
+        }
+        .onAppear {
+            guard !initialized else { return }
+            initialized = true
+            showingWelcome = !startWithDevice && (!model.setupWelcomeCompleted || model.permissionOnboardingCompleted)
+            permission = startWithDevice ? nil : model.setupPermission
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            model.refresh()
+        }
+    }
+
+    private var welcome: some View {
+        GeometryReader { geometry in
+            // MainMenu.nib uses a 1200 × 680 canvas, a 188-point welcome image,
+            // title top 382, description top 430 and a 40-point primary button.
+            VStack(spacing: 0) {
+                Image(nsImage: NSImage(named: NSImage.applicationIconName) ?? NSImage())
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 188, height: 188)
+                    .accessibilityHidden(true)
+                    .padding(.bottom, 44)
+                Text("欢迎使用 Rimo")
+                    .font(.system(size: 32, weight: .bold))
+                    .frame(height: 40)
+                    .accessibilityAddTraits(.isHeader)
+                    .padding(.bottom, 8)
+                Text("将 Siri Remote 变成 Mac 的遥控器，自定义按键，轻松控制常用应用程序。")
+                    .font(.system(size: 14))
+                    .foregroundStyle(DeviceSettingsStyle.text)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(5)
+                    .frame(maxWidth: 736, minHeight: 40)
+                    .padding(.bottom, 70)
+                Button("立即体验") {
+                    model.beginSetup()
+                    permission = .accessibility
+                    model.rememberSetupPermission(.accessibility)
+                    showingWelcome = false
+                }
+                .buttonStyle(RimoButtonStyle(primary: true))
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(.horizontal, 40)
+            .padding(.top, max(50, (geometry.size.height - 680) / 2 + 150))
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        }
+    }
+
+    private func permissionPage(_ permission: RimoPermission) -> some View {
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
+                Spacer(minLength: 28)
+                Group {
+                    if granted {
+                        Image(colorScheme == .dark ? "PermissionSuccessDark" : "PermissionSuccess")
+                            .resizable()
+                            .scaledToFit()
+                    } else {
+                        PermissionSettingsIllustration(permission: permission)
+                    }
+                }
+                // .opt-in-container-image is 63% wide and its child is 50% wide.
+                .frame(width: geometry.size.width * 0.315,
+                       height: geometry.size.width * 0.315 * (granted ? 0.5 : 0.61))
+                .accessibilityHidden(true)
+                .padding(.bottom, granted ? 18 : 36)
+                Text(granted ? "已获得\(permission.title)权限！" : "授予\(permission.title)权限")
+                    .font(.system(size: 32, weight: .bold))
+                    .multilineTextAlignment(.center)
+                    .accessibilityAddTraits(.isHeader)
+                    .padding(.bottom, granted ? 36 : 16)
+                if !granted {
+                    Text("\(permission.purpose)\(permission.instructions)")
+                        .font(.system(size: 14))
+                        .foregroundStyle(DeviceSettingsStyle.text)
+                        .lineSpacing(5)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: 785)
+                    Button("需要帮助？") { showingHelp.toggle() }
+                        .buttonStyle(DeviceSettingsLinkStyle())
+                        .padding(.top, 8)
+                    if showingHelp {
+                        Text("如果列表中没有 Rimo，请先点击下方按钮。若系统提示重新打开应用，请选择“退出并重新打开”，然后继续完成授权。")
+                            .font(.system(size: 14))
+                            .foregroundStyle(RimoStyle.muted)
+                            .lineSpacing(5)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: 650)
+                            .padding(.top, 12)
+                    }
+                }
+                Button(granted ? "继续" : "打开\(permission.title)") {
+                    if granted {
+                        let following = RimoPermission.allCases.drop(while: { $0 != permission }).dropFirst()
+                        self.permission = following.first
+                    } else { model.requestPermission(permission) }
+                }
+                .buttonStyle(RimoButtonStyle(primary: true))
+                .keyboardShortcut(.defaultAction)
+                .padding(.top, granted ? 0 : 28)
+                Spacer(minLength: 28)
+            }
+            .padding(.horizontal, 40)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay(alignment: .bottom) {
+                if !granted {
+                    HStack(spacing: 8) {
+                        ForEach(0..<3, id: \.self) { index in
+                            Circle()
+                                .fill(index == RimoPermission.allCases.firstIndex(of: permission) ? RimoStyle.action : RimoStyle.line)
+                                .frame(width: 7, height: 7)
+                        }
+                    }
+                    .accessibilityLabel("第 \((RimoPermission.allCases.firstIndex(of: permission) ?? 0) + 1) 项权限，共 3 项")
+                    .padding(.bottom, 48)
                 }
             }
         }
+    }
+}
+
+/// Native reconstruction of Options+ Ventura permission artwork. The reference
+/// bindings are _0xb251b6 (accessibility), _0x47d154 (input), _0x55aec1 (Bluetooth).
+private struct PermissionSettingsIllustration: View {
+    let permission: RimoPermission
+
+    var body: some View {
+        GeometryReader { geometry in
+            let scale = geometry.size.width / 400
+            HStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 5) {
+                        ForEach(0..<3, id: \.self) { _ in
+                            Circle().fill(RimoStyle.action).frame(width: 7, height: 7)
+                        }
+                    }
+                    .padding(.bottom, 2)
+                    HStack(spacing: 5) {
+                        Image(systemName: "magnifyingglass").font(.system(size: 10))
+                        Spacer()
+                    }
+                    .foregroundStyle(RimoStyle.quiet)
+                    .padding(6)
+                    .background(RimoStyle.actionConfigurationFill, in: RimoStyle.controlShape)
+                    ForEach(["person.crop.circle.fill", "shield.fill", "chart.bar.fill", "accessibility"], id: \.self) { icon in
+                        HStack(spacing: 10) {
+                            Image(systemName: icon).font(.system(size: 16)).frame(width: 18)
+                            Capsule().frame(height: 4)
+                        }
+                        .foregroundStyle(RimoStyle.quiet.opacity(0.55))
+                    }
+                    Label("隐私与安全性", systemImage: "hand.raised.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(6)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color(red: 0, green: 0.63, blue: 0.95), in: RimoStyle.controlShape)
+                    Spacer(minLength: 0)
+                }
+                .padding(12)
+                .frame(width: 164)
+                .background(RimoStyle.surface)
+                VStack(alignment: .leading, spacing: 12) {
+                    Label(permission.title, systemImage: "chevron.left")
+                        .font(.system(size: 11, weight: .semibold))
+                    RimoDivider()
+                    VStack(alignment: .leading, spacing: 5) {
+                        Capsule().frame(width: 96, height: 5)
+                        Capsule().frame(width: 64, height: 5)
+                    }
+                    .foregroundStyle(RimoStyle.quiet.opacity(0.6))
+                    .padding(.vertical, 2)
+                    VStack(spacing: 0) {
+                        previewRow(highlighted: false)
+                        RimoDivider()
+                        previewRow(highlighted: true)
+                        RimoDivider()
+                        previewRow(highlighted: false)
+                    }
+                    .background(RimoStyle.surface)
+                    Spacer(minLength: 0)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(RimoStyle.actionSidebarHeader)
+            }
+            .frame(width: 400, height: 244)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(RimoStyle.line) }
+            .scaleEffect(scale, anchor: .topLeading)
+        }
+    }
+
+    private func previewRow(highlighted: Bool) -> some View {
+        HStack(spacing: 6) {
+            if highlighted {
+                Image("RimoBrandIcon").resizable().frame(width: 20, height: 20)
+                Text("Rimo").font(.system(size: 12, weight: .semibold))
+            } else {
+                RoundedRectangle(cornerRadius: 3).fill(RimoStyle.line).frame(width: 20, height: 20)
+                Capsule().fill(RimoStyle.line).frame(width: 52, height: 4)
+            }
+            Spacer(minLength: 4)
+            Capsule()
+                .fill(RimoStyle.action)
+                .frame(width: 21, height: 11)
+                .overlay(alignment: .trailing) {
+                    Circle().fill(.white).padding(2).frame(width: 11, height: 11)
+                }
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 43)
+    }
+}
+
+private struct RemotePairingView: View {
+    @ObservedObject var model: RimoModel
+    let completesExistingConnection: Bool
+    let close: () -> Void
+    let connected: () -> Void
+    @State private var openedBluetoothSettings = false
+    @State private var finished = false
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                VStack(spacing: 0) {
+                    Text("选择连接类型")
+                        .font(.system(size: 24, weight: .bold))
+                        .accessibilityAddTraits(.isHeader)
+                        .padding(.top, 45)
+                    Spacer()
+                    Text("要配对您的遥控器，请通过蓝牙连接")
+                        .font(.system(size: 14))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+                        .padding(.bottom, max(32, geometry.size.height * 0.065))
+                }
+                BluetoothConnectionRow {
+                    openedBluetoothSettings = true
+                }
+                    .frame(width: geometry.size.width * 0.4)
+                VStack {
+                    HStack {
+                        Button(action: close) {
+                            Image(systemName: "arrow.left")
+                                .font(.system(size: 20, weight: .medium))
+                                .frame(width: 40, height: 40)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("返回设备首页")
+                        .keyboardShortcut(.cancelAction)
+                        Spacer()
+                    }
+                    .padding(.leading, 20)
+                    .padding(.top, 30)
+                    Spacer()
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .background(RimoStyle.canvas)
+        .foregroundStyle(DeviceSettingsStyle.text)
+        .onAppear {
+            if completesExistingConnection { finishIfConnected() }
+        }
+        .onChange(of: model.isRemoteConnected) { connected in
+            if connected { finishIfConnected() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            if openedBluetoothSettings { finishIfConnected() }
+        }
+    }
+
+    private func finishIfConnected() {
+        guard model.isRemoteConnected, !finished else { return }
+        finished = true
+        connected()
+    }
+}
+
+private struct BluetoothConnectionRow: View {
+    let openSettings: () -> Void
+    @State private var hovering = false
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        Button {
+            if let url = URL(string: "x-apple.systempreferences:com.apple.BluetoothSettings") {
+                openSettings()
+                NSWorkspace.shared.open(url)
+            }
+        } label: {
+            HStack(spacing: 16) {
+                Image("BluetoothMark")
+                    .resizable()
+                    .renderingMode(.template)
+                    .scaledToFit()
+                    .frame(width: 15, height: 24)
+                    .foregroundStyle(.white)
+                    .frame(width: 24, height: 30)
+                    .background(Color(red: 0, green: 0.48, blue: 1), in: RoundedRectangle(cornerRadius: 12))
+                    .frame(width: 36)
+                Text("蓝牙")
+                    .font(.system(size: 16))
+                    .foregroundStyle(DeviceSettingsStyle.text)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(hovering ? DeviceSettingsStyle.action : DeviceSettingsStyle.text)
+            }
+            .padding(.horizontal, 24)
+            .frame(height: 96)
+            .frame(maxWidth: .infinity)
+            .background(hovering ? RimoStyle.action.opacity(0.04) : RimoStyle.surface,
+                        in: RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(focused ? DeviceSettingsStyle.action : RimoStyle.line,
+                                  lineWidth: focused ? 2 : 1)
+            }
+            .shadow(color: .black.opacity(0.08), radius: 4, x: 2, y: 2)
+            .contentShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+        .focused($focused)
+        .onHover { hovering = $0 }
+        .accessibilityLabel("蓝牙，打开系统蓝牙设置")
     }
 }

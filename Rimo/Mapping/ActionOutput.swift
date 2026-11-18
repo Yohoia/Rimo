@@ -6,11 +6,18 @@ import CoreGraphics
 enum ActionOutput {
     static func perform(_ action: RemoteAction) throws {
         if case .openApp(let app) = action {
-            guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: app.bundleIdentifier) else {
-                throw OutputError.message("找不到「\(app.name)」，请重新选择 App。")
+            guard let url = app.installedURL else {
+                throw OutputError.message("找不到「\(app.name)」，请重新选择应用程序。")
             }
             NSWorkspace.shared.openApplication(at: url, configuration: .init()) { _, _ in }
             return
+        }
+        if case .system(.activateSiri) = action {
+            let workspace = NSWorkspace.shared
+            for bundleID in ["com.apple.Siri", "com.apple.siri.launcher"] {
+                if let url = workspace.urlForApplication(withBundleIdentifier: bundleID), workspace.open(url) { return }
+            }
+            throw OutputError.message("无法打开 Siri。请确认已在 macOS 系统设置中启用 Siri。")
         }
         guard CGPreflightPostEventAccess() else {
             throw OutputError.message("请在设备设置中允许辅助功能，再执行映射。")
@@ -43,14 +50,16 @@ enum ActionOutput {
                     .cgEvent?.post(tap: .cghidEventTap)
             }
         case .system(let system):
-            guard system != .toggleScrollMode else { return }
-            if let key = system.shortcut {
-                guard key.post() else { throw OutputError.message("无法发送系统操作。") }
-            } else {
+            switch system {
+            case .toggleScrollMode, .activateSiri:
+                break
+            case .sleepDisplay:
                 let task = Process()
                 task.executableURL = URL(fileURLWithPath: "/usr/bin/pmset")
                 task.arguments = ["displaysleepnow"]
                 try task.run()
+            default:
+                guard system.shortcut?.post() == true else { throw OutputError.message("无法发送系统操作。") }
             }
         case .text(let text):
             // Split on Character boundaries so emoji and surrogate pairs stay intact.

@@ -5,6 +5,8 @@ import SwiftUI
 struct MappingView: View {
     @ObservedObject var model: RimoModel
     @Binding var selected: RemoteButton?
+    var sceneID: String? = nil
+    var appPickerVisible = false
     let presentationActive: Bool
     var onReady: () -> Void = {}
 
@@ -13,29 +15,32 @@ struct MappingView: View {
     @State private var pose = RemotePose.detail
     @State private var dragging = false
     @State private var idleSince = Date.now
-    @State private var focusedButton: RemoteButton?
-    @State private var movement: CameraMovement?
+    @State private var camera = RemoteCameraMotion()
+    @State private var frameTime = Date.now
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.controlActiveState) private var activeState
 
+    private var wantsFocusedCamera: Bool { selected != nil || appPickerVisible }
+
+    private var frameInterval: TimeInterval {
+        if presentationActive && camera.movement != nil { return 1.0 / 60 }
+        return isSwaying ? 1.0 / 30 : 3600
+    }
+
     private var isSwaying: Bool {
-        presentationActive && model.isRemoteConnected && focusedButton == nil && movement == nil
+        presentationActive && model.isRemoteConnected && selected == nil && !appPickerVisible && camera.movement == nil
             && !reduceMotion && activeState != .inactive && !dragging && pose == .detail
     }
 
     var body: some View {
         GeometryReader { geometry in
-            TimelineView(.animation(minimumInterval: 1.0 / (movement == nil ? 30 : 60),
-                                    paused: movement == nil && !isSwaying)) { _ in
-                let now = Date.now
-                let progress = movement?.progress(at: now) ?? (focusedButton == nil ? 0 : 1)
-                let presentation = ButtonStage(size: geometry.size, progress: progress)
-                render(presentation, pose: displayedPose(at: now), breathing: glow(at: now))
-            }
+            let progress = camera.progress(at: frameTime)
+            let presentation = ButtonStage(size: geometry.size, progress: progress)
+            render(presentation, pose: displayedPose(at: frameTime), breathing: glow(at: frameTime))
             .onReceive(model.$lastButton.dropFirst()) { button in
                 guard model.isRemoteConnected, let button, RemoteButton.a2540Buttons.contains(button) else { return }
                 let projection = ButtonStage(size: geometry.size, progress: 0).projection
-                if model.isSettingsFocused(), focusedButton == nil, !dragging,
+                if model.isSettingsFocused(), selected == nil, !dragging,
                    RemoteModelView.focusBounds(for: button, in: projection, pose: pose) == nil {
                     orbit(.reset)
                 }
@@ -43,27 +48,41 @@ struct MappingView: View {
                 pressCount &+= 1
             }
         }
-        .onAppear { focusedButton = selected }
-        .onChange(of: selected, perform: changeFocus)
-        .onChange(of: presentationActive) { if $0 { idleSince = .now } }
+        .task(id: frameInterval) {
+            frameTime = .now
+            guard frameInterval < 1 else { return }
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(frameInterval)) }
+                catch { return }
+                frameTime = .now
+            }
+        }
+        .onAppear { camera.reset(focused: wantsFocusedCamera); frameTime = .now }
+        .onChange(of: wantsFocusedCamera) { focused in changeFocus(focused: focused) }
+        .onChange(of: presentationActive) { active in
+            if active {
+                idleSince = .now
+                camera.reset(focused: wantsFocusedCamera)
+                pose = .detail
+            }
+        }
         .onChange(of: activeState) { if $0 != .inactive { idleSince = .now } }
-        .onChange(of: reduceMotion) { enabled in if enabled { movement = nil } }
+        .onChange(of: reduceMotion) { enabled in if enabled { camera.reset(focused: wantsFocusedCamera) } }
         .onChange(of: model.isRemoteConnected) { connected in
             if connected {
                 idleSince = .now
             } else {
-                focusedButton = nil
+                camera.reset(focused: false)
                 selected = nil
-                movement = nil
                 recentlyPressed = nil
                 dragging = false
                 pose = .detail
             }
         }
-        .task(id: movement?.startedAt) {
-            guard let movement else { return }
+        .task(id: camera.movement?.startedAt) {
+            guard let movement = camera.movement else { return }
             try? await Task.sleep(for: .seconds(movement.duration))
-            if !Task.isCancelled, self.movement?.startedAt == movement.startedAt { self.movement = nil }
+            if !Task.isCancelled { camera.finish(startedAt: movement.startedAt) }
         }
         .task(id: pressCount) {
             try? await Task.sleep(for: .milliseconds(520))
@@ -77,7 +96,13 @@ struct MappingView: View {
 
     private func render(_ stage: ButtonStage, pose: RemotePose, breathing: Double) -> some View {
         let projection = stage.projection
-        let button = focusedButton ?? movement?.retiringButton
+        let button = appPickerVisible ? nil : selected
+        let mappings = model.mappings(sceneID: sceneID)
+        let mappedButtons = Set(RemoteButton.a2540Buttons.filter { button in
+            RemoteTrigger.allCases.contains { trigger in
+                mappings.isEnabled(button, trigger: trigger) && mappings[button, trigger]?.isAssignable(to: button) == true
+            }
+        })
         return ZStack(alignment: .topLeading) {
             if model.isRemoteConnected {
                 RemoteAmbientGlow(breathing: breathing)
@@ -89,9 +114,9 @@ struct MappingView: View {
             }
 
             RemoteModelView(selected: button, recentlyPressed: recentlyPressed, pose: pose,
-                            projection: projection, calloutOpacity: stage.calloutOpacity,
-                            compactCallout: stage.compactCallout,
-                            canOrbit: focusedButton == nil && movement == nil,
+                            projection: projection, outlineOpacity: stage.outlineOpacity,
+                            mappedButtons: mappedButtons,
+                            canOrbit: selected == nil && !appPickerVisible && camera.movement == nil,
                             onOrbit: orbit, onSelect: select, onReady: onReady)
                 .frame(width: projection.size.width, height: projection.size.height)
                 .saturation(model.isRemoteConnected ? 1 : 0)
@@ -121,36 +146,27 @@ struct MappingView: View {
         .clipped()
     }
 
-    private func changeFocus(_ button: RemoteButton?) {
-        let previous = focusedButton
-        guard (previous != nil) != (button != nil) else {
-            focusedButton = button
-            return
-        }
+    private func changeFocus(focused: Bool) {
         let now = Date.now
-        let currentProgress = movement?.progress(at: now) ?? (previous == nil ? 0 : 1)
         let currentPose = displayedPose(at: now)
         let currentGlow = glow(at: now)
-        focusedButton = button
         dragging = false
         pose = .detail
-
-        let transition = CameraMovement(startedAt: now, from: currentProgress, to: button == nil ? 0 : 1,
-                                        fromPose: currentPose, fromGlow: currentGlow,
-                                        retiringButton: button == nil ? previous : nil)
-        movement = reduceMotion || currentProgress == transition.to ? nil : transition
-        if button == nil { idleSince = now.addingTimeInterval(movement?.duration ?? 0) }
+        camera.retarget(focused: focused, at: now, pose: currentPose, glow: currentGlow,
+                        reduceMotion: reduceMotion)
+        frameTime = now
+        if !focused { idleSince = now.addingTimeInterval(camera.movement?.duration ?? 0) }
     }
 
     private func displayedPose(at time: Date) -> RemotePose {
-        if let movement {
+        if let movement = camera.movement {
             return movement.fromPose.blended(to: .detail, fraction: movement.eased(at: time))
         }
         return isSwaying ? pose.swaying(elapsed: time.timeIntervalSince(idleSince)) : pose
     }
 
     private func glow(at time: Date) -> Double {
-        if let movement {
+        if let movement = camera.movement {
             return movement.fromGlow + (0.45 - movement.fromGlow) * movement.eased(at: time)
         }
         guard isSwaying else { return 0.45 }
@@ -159,7 +175,7 @@ struct MappingView: View {
     }
 
     private func orbit(_ change: RemoteOrbitChange) {
-        guard model.isRemoteConnected, focusedButton == nil, movement == nil else { return }
+        guard model.isRemoteConnected, selected == nil, camera.movement == nil else { return }
         switch change {
         case .dragging(let next): dragging = true; pose = next
         case .inspecting(let next): dragging = false; pose = next
@@ -167,19 +183,45 @@ struct MappingView: View {
         }
     }
 
-    private func select(_ button: RemoteButton?) {
-        guard button == nil || model.isRemoteConnected else { return }
-        selected = selected == button ? nil : button
+    private func select(_ button: RemoteButton) {
+        guard model.isRemoteConnected else { return }
+        selected = button
     }
 }
 
-private struct CameraMovement {
+struct RemoteCameraMotion {
+    private(set) var focused = false
+    private(set) var movement: CameraMovement?
+
+    func progress(at time: Date) -> Double {
+        movement?.progress(at: time) ?? (focused ? 1 : 0)
+    }
+
+    mutating func reset(focused: Bool) {
+        self.focused = focused
+        movement = nil
+    }
+
+    mutating func retarget(focused: Bool, at time: Date, pose: RemotePose, glow: Double, reduceMotion: Bool) {
+        guard focused != self.focused else { return }
+        let current = progress(at: time)
+        self.focused = focused
+        movement = reduceMotion ? nil : CameraMovement(startedAt: time, from: current, to: focused ? 1 : 0,
+                                                       fromPose: pose, fromGlow: glow)
+    }
+
+    mutating func finish(startedAt: Date) {
+        guard movement?.startedAt == startedAt else { return }
+        movement = nil
+    }
+}
+
+struct CameraMovement {
     let startedAt: Date
     let from: Double
     let to: Double
     let fromPose: RemotePose
     let fromGlow: Double
-    let retiringButton: RemoteButton?
 
     var duration: TimeInterval { (to == 1 ? 0.52 : 0.34) * max(0.38, abs(to - from)) }
 
@@ -209,7 +251,7 @@ private struct ButtonStage {
         // Frame z=-6.76 (top of shell) through z=1.93 (lowest key).
         // The lateral limit reserves space for both label columns beside the model.
         let focusedUnit = max(restingUnit, min((size.height - 90) / 8.69,
-                                              (viewportWidth - RemoteModelView.calloutMargins - 12) / 3.9))
+                                              (viewportWidth - RemoteModelView.focusedHorizontalInset - 12) / 3.9))
         let restingOrigin = size.height / 2 + RemotePresentation.centerOffset(in: size.height)
         let focusedOrigin = 32 + 6.76 * focusedUnit
         return RemoteProjection(size: CGSize(width: viewportWidth, height: size.height),
@@ -218,8 +260,7 @@ private struct ButtonStage {
     }
     var glowY: CGFloat { projection.y(at: -3.2 * progress) }
     var nameOpacity: Double { 1 - min(1, progress / 0.32) }
-    var calloutOpacity: Double { reveal(from: 0.56, to: 0.91) }
-    var compactCallout: Bool { size.width < 1150 && size.height < 560 }
+    var outlineOpacity: Double { reveal(from: 0.56, to: 0.91) }
 
     private func interpolate(_ from: CGFloat, _ to: CGFloat) -> CGFloat { from + (to - from) * progress }
     private func reveal(from: Double, to: Double) -> Double {
@@ -268,7 +309,6 @@ struct ButtonMappingEditor: View {
     var sceneID: String? = nil
     var inSidebar = false
     let close: () -> Void
-    let openShortcuts: () -> Void
     @State private var trigger = RemoteTrigger.single
     @State private var recordingState = RecordingState.idle
     @State private var recordingFeedback: Bool?
@@ -276,8 +316,7 @@ struct ButtonMappingEditor: View {
     @State private var kindOverride: EditorKind?
     @State private var draftText = ""
     @State private var draftReturn = false
-    @State private var appPickerError: String?
-    @State private var choosingAction = true
+    @State private var expandedAction: ActionRowID?
     @State private var actionQuery = ""
     @State private var openGroups: Set<ActionGroup> = []
     @FocusState private var searchingActions: Bool
@@ -307,10 +346,11 @@ struct ButtonMappingEditor: View {
         }
         .font(RimoStyle.body)
         .onAppear(perform: loadTextDraft)
+        .onAppear(perform: revealCurrentConfiguration)
         .onChange(of: trigger) { _ in loadTextDraft() }
         .onChange(of: action) { _ in if kind.wrappedValue != .text { loadTextDraft() } }
         .onDisappear(perform: stopCapture)
-        .onChange(of: reserved) { if $0 { stopCapture() } }
+        .onChange(of: reserved) { if $0 { closeActionConfiguration() } }
         .background {
             if capturing {
                 ShortcutCapture { shortcut in
@@ -342,10 +382,8 @@ struct ButtonMappingEditor: View {
                     .foregroundStyle(RimoStyle.muted)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(32)
-            } else if choosingAction {
-                actionBrowser
             } else {
-                sidebarConfiguration
+                actionBrowser
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -372,40 +410,6 @@ struct ButtonMappingEditor: View {
         .accessibilityLabel("触发方式")
         .accessibilityValue(trigger.title)
         .help("选择此按键的触发方式")
-    }
-
-    private var sidebarConfiguration: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button(action: showActionBrowser) {
-                HStack(spacing: 8) {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 11, weight: .semibold))
-                    Text("动作列表")
-                }
-                .font(RimoStyle.label)
-                .frame(height: 43)
-                .padding(.horizontal, 24)
-            }
-            .buttonStyle(.plain)
-            sidebarDivider
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(kind.wrappedValue.title)
-                            .font(.system(size: 18, weight: .semibold))
-                            .accessibilityAddTraits(.isHeader)
-                        if action != nil, kind.wrappedValue == EditorKind(action: action) {
-                            Text(actionSummary)
-                                .font(RimoStyle.label)
-                                .foregroundStyle(RimoStyle.muted)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    configurationFields
-                }
-                .padding(24)
-            }
-        }
     }
 
     private var sceneEditor: some View {
@@ -482,62 +486,73 @@ struct ButtonMappingEditor: View {
         return VStack(alignment: .leading, spacing: 0) {
             actionSearchField
             sidebarDivider
-            ScrollView {
-                if groups.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("没有符合的动作").font(RimoStyle.title)
-                        hint("试试「快捷键」「滚动」或「播放」。")
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(34)
-                } else {
-                    VStack(spacing: 0) {
-                        ForEach(groups) { group in
-                            if searching || group == .recommended {
-                                Text(group.title)
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .frame(height: 50)
-                                    .padding(.horizontal, 33)
-                                    .accessibilityAddTraits(.isHeader)
-                            } else {
-                                actionGroupButton(group)
-                            }
-                            if searching || group == .recommended || openGroups.contains(group) {
-                                let items = groupChoices(group).filter {
-                                    !searching || group.title.localizedStandardContains(query) || $0.matches(query)
-                                }
-                                VStack(spacing: 0) {
-                                    if group == .keyboard && !searching {
-                                        actionRow(.configure(.keyboard))
-                                        ForEach(SystemAction.editingActions) { actionRow(.system($0)) }
-                                        ForEach(KeyboardShortcut.keyGroups) { section in
-                                            Text(section.title)
-                                                .font(.system(size: 12, weight: .medium))
-                                                .foregroundStyle(RimoStyle.muted)
-                                                .frame(maxWidth: .infinity, alignment: .leading)
-                                                .padding(.horizontal, 16)
-                                                .padding(.top, 18)
-                                                .padding(.bottom, 8)
-                                                .accessibilityAddTraits(.isHeader)
-                                            ForEach(section.keys) { actionRow(.key($0.id)) }
-                                        }
-                                    } else {
-                                        ForEach(items) { actionRow($0) }
-                                    }
-                                }
-                                .padding(.horizontal, 16)
-                                .padding(.bottom, 12)
-                            }
-                            if group != groups.last { sidebarDivider }
-                        }
-                    }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    actionGroups(groups, query: query, searching: searching)
+                }
+                .onChange(of: expandedAction) { row in
+                    if let row { proxy.scrollTo(row) }
                 }
             }
-            if let error = model.configurationError ?? model.actionError {
+            if let error = model.configurationError ?? (expandedAction == nil ? model.actionError : nil) {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .font(RimoStyle.label)
                     .padding(16)
+            }
+        }
+        .onChange(of: actionQuery) { _ in closeActionConfiguration() }
+        .onChange(of: searchingActions) { if $0 { stopCapture() } }
+    }
+
+    @ViewBuilder private func actionGroups(_ groups: [ActionGroup], query: String, searching: Bool) -> some View {
+        if groups.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("没有符合的动作").font(RimoStyle.title)
+                hint("试试「快捷键」「滚动」或「播放」。")
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(34)
+        } else {
+            VStack(spacing: 0) {
+                ForEach(groups) { group in
+                    if searching || group == .recommended {
+                        Text(group.title)
+                            .font(.system(size: 14, weight: .semibold))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .frame(height: 50)
+                            .padding(.horizontal, 33)
+                            .accessibilityAddTraits(.isHeader)
+                    } else {
+                        actionGroupButton(group)
+                    }
+                    if searching || group == .recommended || openGroups.contains(group) {
+                        let items = groupChoices(group).filter {
+                            !searching || group.title.localizedStandardContains(query) || $0.matches(query)
+                        }
+                        VStack(spacing: 0) {
+                            if group == .keyboard && !searching {
+                                actionRow(.configure(.keyboard), in: group)
+                                ForEach(SystemAction.editingActions) { actionRow(.system($0), in: group) }
+                                ForEach(KeyboardShortcut.keyGroups) { section in
+                                    Text(section.title)
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundStyle(RimoStyle.muted)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.horizontal, 16)
+                                        .padding(.top, 18)
+                                        .padding(.bottom, 8)
+                                        .accessibilityAddTraits(.isHeader)
+                                    ForEach(section.keys) { actionRow(.key($0.id), in: group) }
+                                }
+                            } else {
+                                ForEach(items) { actionRow($0, in: group) }
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 12)
+                    }
+                    if group != groups.last { sidebarDivider }
+                }
             }
         }
     }
@@ -598,7 +613,12 @@ struct ButtonMappingEditor: View {
     private func actionGroupButton(_ group: ActionGroup) -> some View {
         let expanded = openGroups.contains(group)
         return Button {
-            if expanded { openGroups.remove(group) } else { openGroups.insert(group) }
+            if expanded {
+                if expandedAction?.group == group { closeActionConfiguration() }
+                openGroups.remove(group)
+            } else {
+                openGroups.insert(group)
+            }
         } label: {
             HStack {
                 Text(group.title).font(.system(size: 14, weight: .semibold))
@@ -615,49 +635,73 @@ struct ButtonMappingEditor: View {
         .accessibilityValue(expanded ? "已展开" : "已折叠")
     }
 
-    private func actionRow(_ choice: ActionChoice) -> some View {
+    private func actionRow(_ choice: ActionChoice, in group: ActionGroup) -> some View {
+        let row = ActionRowID(group: group, choice: choice)
+        let expanded = expandedAction == row
         let restriction = assignmentRestriction(for: choice.action)
         let current = restriction == nil && (action.map(choice.represents) ?? false)
-        return Button {
-            searchingActions = false
-            kind.wrappedValue = choice.kind
-            if let immediate = choice.action, !current {
-                guard model.setAction(immediate, for: button, trigger: trigger, sceneID: sceneID) else { return }
-            }
-            choosingAction = false
-        } label: {
-            HStack(spacing: 15) {
-                Circle()
-                    .fill(current ? RimoStyle.assignmentInk : RimoStyle.actionRadio)
-                    .overlay {
-                        if current { Circle().fill(RimoStyle.assignmentAccent).frame(width: 5, height: 5) }
-                    }
-                    .frame(width: 18, height: 18)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(choice.title)
-                        .font(.system(size: 14, weight: current ? .semibold : .regular))
-                    if let restriction {
-                        Text(restriction)
-                            .font(RimoStyle.label)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+        let highlighted = expanded || (expandedAction == nil && current && (group == .recommended || !actionQuery.isEmpty))
+        return VStack(spacing: 8) {
+            Button {
+                if expanded {
+                    closeActionConfiguration()
+                    return
                 }
-                Spacer(minLength: 0)
-                if restriction != nil {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 14))
+                searchingActions = false
+                if let immediate = choice.action, !current {
+                    guard model.setAction(immediate, for: button, trigger: trigger, sceneID: sceneID) else { return }
+                }
+                kind.wrappedValue = choice.kind
+                draftFlags = []
+                expandedAction = row
+            } label: {
+                HStack(spacing: 15) {
+                    Circle()
+                        .fill(highlighted ? RimoStyle.assignmentInk : RimoStyle.actionRadio)
+                        .overlay {
+                            if highlighted { Circle().fill(RimoStyle.assignmentAccent).frame(width: 5, height: 5) }
+                        }
+                        .frame(width: 18, height: 18)
                         .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(choice.title)
+                            .font(.system(size: 14, weight: highlighted ? .semibold : .regular))
+                        if current, case .configure = choice, let action {
+                            Text(action.title)
+                                .font(RimoStyle.label)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        if let restriction {
+                            Text(restriction)
+                                .font(RimoStyle.label)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                    if restriction != nil {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 14))
+                            .accessibilityHidden(true)
+                    }
                 }
+                .foregroundStyle(restriction != nil ? RimoStyle.muted : highlighted ? RimoStyle.assignmentInk : RimoStyle.ink)
+                .padding(.horizontal, 16)
+                .frame(minHeight: highlighted || restriction != nil ? 48 : 37)
             }
-            .foregroundStyle(restriction != nil ? RimoStyle.muted : current ? RimoStyle.assignmentInk : RimoStyle.ink)
-            .padding(.horizontal, 16)
-            .frame(minHeight: current || restriction != nil ? 48 : 37)
+            .buttonStyle(ActionBrowserRowStyle(current: highlighted, expanded: expanded))
+            .disabled(restriction != nil)
+            .accessibilityAddTraits(highlighted ? .isSelected : [])
+            .accessibilityValue(expanded ? "已展开" : "")
+
+            if expanded {
+                configurationFields
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RimoStyle.actionConfigurationFill, in: RoundedRectangle(cornerRadius: 8))
+            }
         }
-        .buttonStyle(ActionBrowserRowStyle(current: current))
-        .padding(.bottom, current ? 6 : 0)
-        .disabled(restriction != nil)
-        .accessibilityAddTraits(current ? .isSelected : [])
+        .padding(.bottom, highlighted ? 6 : 0)
+        .id(row)
     }
 
     private func assignmentRestriction(for action: RemoteAction?) -> String? {
@@ -680,7 +724,7 @@ struct ButtonMappingEditor: View {
             case .right: [.key(UInt16(kVK_RightArrow)), .system(.nextDesktop), .media(.nextTrack)]
             case .back, .menu: [.key(UInt16(kVK_Escape)), .system(.showDesktop)]
             case .power: [.system(.sleepDisplay), .system(.lockScreen)]
-            case .siri: [.configure(.keyboard), .configure(.shortcut), .system(.toggleScrollMode)]
+            case .siri: [.system(.activateSiri), .configure(.keyboard), .configure(.shortcut), .system(.toggleScrollMode)]
             }
             var result = suggested
             if !result.contains(.configure(.keyboard)) { result.append(.configure(.keyboard)) }
@@ -689,6 +733,9 @@ struct ButtonMappingEditor: View {
                 result.removeAll { $0 == current }
                 result.insert(current, at: 0)
             }
+            if let expandedAction, expandedAction.group == .recommended, !result.contains(expandedAction.choice) {
+                result.insert(expandedAction.choice, at: 0)
+            }
             return result
         case .keyboard:
             return [.configure(.keyboard)] + SystemAction.editingActions.map(ActionChoice.system)
@@ -696,26 +743,34 @@ struct ButtonMappingEditor: View {
         case .media: return MediaAction.allCases.map(ActionChoice.media)
         case .windows:
             return SystemAction.windowActions.map(ActionChoice.system)
-        case .system: return SystemAction.screenActions.map(ActionChoice.system)
+        case .system: return SystemAction.systemActions.map(ActionChoice.system)
         case .other: return SystemAction.otherActions.map(ActionChoice.system)
         case .apps: return [.configure(.openApp), .configure(.shortcut)]
         }
     }
 
-    private func showActionBrowser() {
+    private func closeActionConfiguration() {
         stopCapture()
         kindOverride = nil
         draftFlags = []
         recordingFeedback = nil
-        appPickerError = nil
-        choosingAction = true
+        expandedAction = nil
+    }
+
+    private func revealCurrentConfiguration() {
+        guard inSidebar, let action else { return }
+        let choice = ActionChoice(current: action)
+        if case .configure = choice {
+            expandedAction = ActionRowID(group: .recommended, choice: choice)
+        }
     }
 
     private func changeTrigger(to item: RemoteTrigger) {
         guard trigger != item else { return }
         trigger = item
         actionQuery = ""
-        showActionBrowser()
+        closeActionConfiguration()
+        revealCurrentConfiguration()
     }
 
     private var triggerPicker: some View {
@@ -784,14 +839,15 @@ struct ButtonMappingEditor: View {
                 additionalFields
             }
 
-            if let error = appPickerError ?? model.actionError {
+            if let error = model.actionError {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .font(RimoStyle.label)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            HStack(spacing: 8) {
-                if let action, !inSidebar || EditorKind(action: action) == kind.wrappedValue {
+            if let action, !inSidebar || EditorKind(action: action) == kind.wrappedValue {
+                if inSidebar { RimoDivider() }
+                HStack(spacing: 8) {
                     Text("启用此触发").font(RimoStyle.label)
                     Toggle("启用此触发", isOn: Binding(get: { mappings.isEnabled(button, trigger: trigger) }, set: {
                         model.setActionEnabled($0, for: button, trigger: trigger, sceneID: sceneID)
@@ -807,14 +863,11 @@ struct ButtonMappingEditor: View {
                     }
                         .buttonStyle(.borderless)
                         .disabled(editingRecording)
-                } else {
-                    Text("设置动作后可启用此触发。")
-                        .font(RimoStyle.label)
-                        .foregroundStyle(RimoStyle.muted)
-                    Spacer(minLength: 0)
                 }
+                .padding(.top, 4)
+            } else if !inSidebar {
+                hint("设置动作后可启用此触发。")
             }
-            .padding(.top, 4)
         }
     }
 
@@ -861,9 +914,9 @@ struct ButtonMappingEditor: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
-            .frame(minHeight: 44)
+            .frame(minHeight: inSidebar ? 48 : 44)
             .foregroundStyle(RimoStyle.ink)
-            .background(RimoStyle.canvas, in: RimoStyle.controlShape)
+            .background(inSidebar ? RimoStyle.surface : RimoStyle.canvas, in: RimoStyle.controlShape)
             .overlay {
                 RimoStyle.controlShape.strokeBorder(
                     editingRecording ? RimoStyle.ink : RimoStyle.line,
@@ -903,7 +956,9 @@ struct ButtonMappingEditor: View {
                 Button("重新读取") { model.loadShortcuts(force: true) }
             } else if available.isEmpty {
                 Text("没有可用的快捷指令").foregroundStyle(RimoStyle.muted)
-                Button(action: openShortcuts) { Text("打开快捷指令页面").underline() }
+                Button("打开 macOS 快捷指令") {
+                    NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Shortcuts.app"))
+                }
                     .buttonStyle(.link)
                     .foregroundStyle(RimoStyle.ink)
             } else {
@@ -938,7 +993,6 @@ struct ButtonMappingEditor: View {
         Binding(get: { kindOverride ?? EditorKind(action: action) }, set: { next in
             stopCapture()
             recordingFeedback = nil
-            appPickerError = nil
             kindOverride = next
             if next == .text { loadTextDraft() }
         })
@@ -947,14 +1001,6 @@ struct ButtonMappingEditor: View {
     private func save(_ action: RemoteAction) {
         recordingFeedback = nil
         _ = model.setAction(action, for: button, trigger: trigger, sceneID: sceneID)
-    }
-
-    private var systemChoices: [SystemAction] {
-        guard inSidebar, case .system(let current) = action else { return SystemAction.allCases }
-        if SystemAction.editingActions.contains(current) { return SystemAction.editingActions }
-        if SystemAction.otherActions.contains(current) { return SystemAction.otherActions }
-        if SystemAction.windowActions.contains(current) { return SystemAction.windowActions }
-        return SystemAction.screenActions
     }
 
     @ViewBuilder private var additionalFields: some View {
@@ -988,47 +1034,55 @@ struct ButtonMappingEditor: View {
             }
             hint("每次触发滚动一次，作用于光标所在区域。")
         case .media:
-            Picker("媒体动作", selection: Binding(get: {
-                if case .media(let value) = action { return Optional(value) }; return nil
-            }, set: { if let value = $0 { save(.media(value)) } })) {
-                Text("选择媒体动作").tag(nil as MediaAction?)
-                ForEach(MediaAction.allCases) { Text($0.title).tag(Optional($0)) }
-            }
-            .labelsHidden()
-            hint("控制系统当前的媒体播放或输出音量。")
-        case .system:
-            Picker("系统操作", selection: Binding(get: {
-                if case .system(let value) = action { return Optional(value) }; return nil
-            }, set: { if let value = $0 { save(.system(value)) } })) {
-                Text("选择系统操作").tag(nil as SystemAction?)
-                ForEach(systemChoices) { item in
-                    Group {
-                        if let restriction = assignmentRestriction(for: .system(item)) {
-                            Label("\(item.title)（\(restriction)）", systemImage: "exclamationmark.triangle")
-                                .disabled(true)
-                        } else {
-                            Text(item.title)
-                        }
-                    }
-                    .tag(Optional(item))
+            if !inSidebar {
+                Picker("媒体动作", selection: Binding(get: {
+                    if case .media(let value) = action { return Optional(value) }; return nil
+                }, set: { if let value = $0 { save(.media(value)) } })) {
+                    Text("选择媒体动作").tag(nil as MediaAction?)
+                    ForEach(MediaAction.allCases) { Text($0.title).tag(Optional($0)) }
                 }
+                .labelsHidden()
+                hint("控制系统当前的媒体播放或输出音量。")
             }
-            .labelsHidden()
+        case .system:
+            if !inSidebar {
+                Picker("系统操作", selection: Binding(get: {
+                    if case .system(let value) = action { return Optional(value) }; return nil
+                }, set: { if let value = $0 { save(.system(value)) } })) {
+                    Text("选择系统操作").tag(nil as SystemAction?)
+                    ForEach(SystemAction.allCases) { item in
+                        Group {
+                            if let restriction = assignmentRestriction(for: .system(item)) {
+                                Label("\(item.title)（\(restriction)）", systemImage: "exclamationmark.triangle")
+                                    .disabled(true)
+                            } else {
+                                Text(item.title)
+                            }
+                        }
+                        .tag(Optional(item))
+                    }
+                }
+                .labelsHidden()
+            }
             if let restriction = assignmentRestriction(for: action) {
                 hint("\(restriction)。请为这个方向键选择其他动作。")
             } else if action == .system(.toggleScrollMode) {
                 hint("触发后用四个方向键滚动。以相同方式再次触发即可恢复原映射，也可从菜单栏关闭。")
-            } else {
+            } else if action == .system(.activateSiri) {
+                hint("请先在 macOS 系统设置中启用 Siri。")
+            } else if !inSidebar || action != nil {
                 hint(SystemAction.otherActions.contains { action == .system($0) }
                      ? "使用 macOS 常用快捷键，前台 App 需要支持对应操作。"
                      : "请确认 macOS 已启用相应的系统快捷键。")
             }
         case .openApp:
-            if case .openApp(let app) = action {
-                Label(app.name, systemImage: "app").font(RimoStyle.title)
+            let app: AppTarget? = { if case .openApp(let value) = action { return value }; return nil }()
+            let editingTrigger = trigger
+            OpenApplicationFields(selection: app) { target in
+                guard kind.wrappedValue == .openApp, trigger == editingTrigger else { return false }
+                return model.setAction(target.map(RemoteAction.openApp), for: button, trigger: trigger, sceneID: sceneID)
             }
-            Button("选择 App…", action: chooseApp).buttonStyle(RimoButtonStyle(primary: true))
-            hint("打开所选 App；已运行时切换到它。")
+            .id(editingTrigger)
         case .text:
             TextEditor(text: $draftText)
                 .font(RimoStyle.body)
@@ -1108,24 +1162,6 @@ struct ButtonMappingEditor: View {
         .disabled(!flags.contains(flag) || editingRecording)
     }
 
-    private func chooseApp() {
-        let picker = NSOpenPanel()
-        picker.allowedContentTypes = [.applicationBundle]
-        picker.directoryURL = URL(fileURLWithPath: "/Applications")
-        picker.prompt = "选择 App"
-        picker.canChooseDirectories = false
-        picker.allowsMultipleSelection = false
-        guard picker.runModal() == .OK, let url = picker.url else { return }
-        guard let bundle = Bundle(url: url), let id = bundle.bundleIdentifier else {
-            appPickerError = "请选择一个有效的 Mac App。"; return
-        }
-        let name = bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
-            ?? bundle.object(forInfoDictionaryKey: "CFBundleName") as? String
-            ?? url.deletingPathExtension().lastPathComponent
-        save(.openApp(.init(bundleIdentifier: id, name: name)))
-        appPickerError = nil
-    }
-
     private var flags: NSEvent.ModifierFlags {
         keyboard.map { NSEvent.ModifierFlags(rawValue: UInt($0.modifiers)) } ?? draftFlags
     }
@@ -1179,6 +1215,11 @@ struct ButtonMappingEditor: View {
             recordingState = .idle
             model.cancelRecording()
         }
+    }
+
+    private struct ActionRowID: Hashable {
+        let group: ActionGroup
+        let choice: ActionChoice
     }
 
     private enum ActionGroup: String, CaseIterable, Identifiable {
@@ -1300,6 +1341,7 @@ struct ButtonMappingEditor: View {
             case .system(.nextDesktop): ["下一个桌面"]
             case .system(.showDesktop): ["显示桌面", "隐藏桌面"]
             case .system(.lockScreen): ["锁定屏幕", "锁屏"]
+            case .system(.activateSiri): ["唤醒 Siri"]
             case .system(.back): ["网页后退"]
             case .system(.forward): ["网页前进"]
             case .system(.newTab): ["新建标签页"]
@@ -1346,25 +1388,140 @@ struct ButtonMappingEditor: View {
     }
 }
 
+private struct OpenApplicationFields: View {
+    let selection: AppTarget?
+    let save: (AppTarget?) -> Bool
+    @State private var draftPath: String?
+    @State private var error: String?
+    @State private var browsing = false
+    @FocusState private var pathFocused: Bool
+
+    private var savedPath: String { selection?.path ?? selection?.installedURL?.path ?? "" }
+    private var pathInput: Binding<String> {
+        Binding(get: { draftPath ?? savedPath }, set: { draftPath = $0; error = nil })
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TextField("应用程序路径", text: pathInput,
+                      prompt: Text("输入应用程序路径").foregroundColor(RimoStyle.muted))
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 14)
+                .frame(height: 48)
+                .background(RimoStyle.surface, in: RimoStyle.controlShape)
+                .overlay {
+                    RimoStyle.controlShape.strokeBorder(pathFocused ? RimoStyle.assignmentAccent : RimoStyle.line)
+                        .allowsHitTesting(false)
+                }
+                .focused($pathFocused)
+                .onSubmit { pathFocused = false }
+                .onChange(of: pathFocused) { focused in
+                    if !focused && !browsing { applyPath() }
+                }
+
+            Button(action: browse) {
+                Text("浏览应用程序")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(RimoStyle.actionConfigurationLink)
+                    .padding(.horizontal, 6)
+                    .frame(minHeight: 32)
+            }
+            .buttonStyle(ActionBrowserRowStyle())
+            .disabled(browsing)
+
+            if let error {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(RimoStyle.label)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .onChange(of: selection) { _ in
+            draftPath = nil
+            error = nil
+        }
+    }
+
+    private func applyPath() {
+        guard let draftPath else { return }
+        let value = draftPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value != savedPath else { self.draftPath = nil; return }
+        if value.isEmpty {
+            if save(nil) { self.draftPath = nil }
+            return
+        }
+        let absolutePath = (value as NSString).expandingTildeInPath
+        guard absolutePath.hasPrefix("/") else {
+            error = "请输入应用程序的完整路径，或点按「浏览应用程序」。"
+            return
+        }
+        apply(URL(fileURLWithPath: absolutePath))
+    }
+
+    private func browse() {
+        let picker = NSOpenPanel()
+        picker.allowedContentTypes = [.applicationBundle]
+        picker.directoryURL = URL(fileURLWithPath: "/Applications", isDirectory: true)
+        picker.prompt = "打开"
+        picker.canChooseDirectories = false
+        picker.allowsMultipleSelection = false
+        browsing = true
+        let finished: (NSApplication.ModalResponse) -> Void = { result in
+            browsing = false
+            guard result == .OK, let url = picker.url else { return }
+            apply(url)
+        }
+        if let window = NSApp.keyWindow {
+            picker.beginSheetModal(for: window, completionHandler: finished)
+        } else {
+            picker.begin(completionHandler: finished)
+        }
+    }
+
+    private func apply(_ url: URL) {
+        guard let target = AppTarget.at(url) else {
+            error = "找不到有效的应用程序。请输入 .app 路径，或点按「浏览应用程序」。"
+            return
+        }
+        guard save(target) else { return }
+        draftPath = nil
+        error = nil
+    }
+}
+
 private struct ActionBrowserRowStyle: ButtonStyle {
     var current = false
+    var expanded = false
 
     func makeBody(configuration: Configuration) -> some View {
-        Row(configuration: configuration, current: current)
+        Row(configuration: configuration, current: current, expanded: expanded)
     }
 
     private struct Row: View {
         let configuration: Configuration
         let current: Bool
+        let expanded: Bool
         @State private var hovered = false
         @Environment(\.isFocused) private var focused
         @Environment(\.isEnabled) private var enabled
 
         var body: some View {
             configuration.label
-                .background(current ? RimoStyle.assignmentAccent
-                            : enabled && (hovered || configuration.isPressed) ? RimoStyle.assignmentAccent.opacity(0.08) : .clear,
-                            in: RimoStyle.controlShape)
+                .background {
+                    if expanded {
+                        GeometryReader { geometry in
+                            Path(roundedRect: CGRect(origin: .zero, size: CGSize(width: geometry.size.width,
+                                                                                 height: geometry.size.height + 8)),
+                                 cornerRadius: 8)
+                                .fill(RimoStyle.assignmentAccent)
+                        }
+                        .clipped()
+                    } else {
+                        RimoStyle.controlShape.fill(
+                            current ? RimoStyle.assignmentAccent
+                                : enabled && (hovered || configuration.isPressed) ? RimoStyle.assignmentAccent.opacity(0.08) : .clear
+                        )
+                    }
+                }
                 .overlay {
                     RimoStyle.controlShape.strokeBorder(focused ? RimoStyle.assignmentAccent : .clear)
                         .allowsHitTesting(false)
@@ -1376,10 +1533,6 @@ private struct ActionBrowserRowStyle: ButtonStyle {
 }
 
 extension RemoteButton {
-    static var a2540Buttons: [Self] {
-        [.power, .up, .down, .left, .right, .select, .back, .home, .playPause, .volumeUp, .volumeDown, .mute, .siri]
-    }
-
     var glyph: String {
         switch self {
         case .up: "chevron.up"

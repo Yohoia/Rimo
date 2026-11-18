@@ -9,6 +9,12 @@ final class HIDMonitor {
         case stopped, waiting, connected, failed(Int32)
     }
 
+    struct DeviceInformation: Equatable {
+        let manufacturer: String?
+        let vendorID: Int?
+        let productID: Int?
+    }
+
     var onBattery: ((Int) -> Void)?
     var onStatus: ((Status) -> Void)?
     var onButton: ((RemoteButton, RemoteButtonEdge) -> Void)?
@@ -51,6 +57,34 @@ final class HIDMonitor {
         })
         // Avoid showing another remote's level when multiple physical devices are present.
         return values.count == 1 ? values.first : nil
+    }
+
+    static func deviceInformation(address: String) -> DeviceInformation? {
+        let probe = IOHIDManagerCreate(kCFAllocatorDefault, 0)
+        IOHIDManagerSetDeviceMatchingMultiple(probe, A2540Input.vendorIDs.map {
+            [kIOHIDVendorIDKey: $0, kIOHIDProductIDKey: A2540Input.productID]
+        } as CFArray)
+        let devices = IOHIDManagerCopyDevices(probe) as? Set<IOHIDDevice> ?? []
+        let matching = devices.filter { device in
+            let value = IOHIDDeviceGetProperty(device, "DeviceAddress" as CFString) as? String
+                ?? IOHIDDeviceGetProperty(device, kIOHIDSerialNumberKey as CFString) as? String
+            return value?.replacingOccurrences(of: "-", with: ":").lowercased() == address
+        }
+        guard !matching.isEmpty else { return nil }
+        func uniqueString(_ key: String) -> String? {
+            let values = Set(matching.compactMap {
+                (IOHIDDeviceGetProperty($0, key as CFString) as? String)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }.filter { !$0.isEmpty })
+            return values.count == 1 ? values.first : nil
+        }
+        func uniqueNumber(_ key: String) -> Int? {
+            let values = Set(matching.compactMap { IOHIDDeviceGetProperty($0, key as CFString) as? Int })
+            return values.count == 1 ? values.first : nil
+        }
+        return DeviceInformation(manufacturer: uniqueString(kIOHIDManufacturerKey),
+                                 vendorID: uniqueNumber(kIOHIDVendorIDKey),
+                                 productID: uniqueNumber(kIOHIDProductIDKey))
     }
 
     // The default IOPS snapshot excludes Bluetooth accessory sources. Request all

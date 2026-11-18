@@ -3,6 +3,10 @@ enum RemoteButton: String, CaseIterable, Identifiable {
 
     var id: Self { self }
 
+    static var a2540Buttons: [Self] {
+        [.power, .up, .down, .left, .right, .select, .back, .home, .playPause, .volumeUp, .volumeDown, .mute, .siri]
+    }
+
     var title: String {
         switch self {
         case .up: "上"

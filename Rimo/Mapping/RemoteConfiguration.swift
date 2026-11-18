@@ -114,12 +114,13 @@ enum MediaAction: String, Codable, CaseIterable, Identifiable {
 enum SystemAction: String, Codable, CaseIterable, Identifiable {
     case toggleScrollMode
     case missionControl, appWindows, previousDesktop, nextDesktop, showDesktop, lockScreen, sleepDisplay
+    case activateSiri
     case copy, cut, paste, undo, redo, selectAll, find, back, forward
     case newTab, previousTab, nextTab, zoomIn, zoomOut, resetZoom, captureScreen, screenshotTools, emoji
 
     // Each action belongs to one browse category; recommendations may surface it again.
     static let windowActions: [Self] = [.missionControl, .appWindows, .showDesktop, .previousDesktop, .nextDesktop]
-    static let screenActions: [Self] = [.lockScreen, .sleepDisplay, .captureScreen, .screenshotTools, .emoji]
+    static let systemActions: [Self] = [.activateSiri, .lockScreen, .sleepDisplay, .captureScreen, .screenshotTools, .emoji]
     static let editingActions: [Self] = [.copy, .cut, .paste, .undo, .redo, .selectAll, .find]
     static let otherActions: [Self] = [.toggleScrollMode, .back, .forward, .newTab, .previousTab,
         .nextTab, .zoomIn, .zoomOut, .resetZoom]
@@ -134,6 +135,7 @@ enum SystemAction: String, Codable, CaseIterable, Identifiable {
         case .showDesktop: "显示/隐藏桌面"
         case .lockScreen: "锁定"
         case .sleepDisplay: "关闭显示器"
+        case .activateSiri: "启动 Siri"
         case .copy: "复制"
         case .cut: "剪切"
         case .paste: "粘贴"
@@ -164,7 +166,7 @@ enum SystemAction: String, Codable, CaseIterable, Identifiable {
         case .nextDesktop: (key, flags) = (kVK_RightArrow, .control)
         case .showDesktop: (key, flags) = (kVK_F11, [])
         case .lockScreen: (key, flags) = (kVK_ANSI_Q, [.control, .command])
-        case .sleepDisplay, .toggleScrollMode: return nil
+        case .sleepDisplay, .toggleScrollMode, .activateSiri: return nil
         case .copy: (key, flags) = (kVK_ANSI_C, .command)
         case .cut: (key, flags) = (kVK_ANSI_X, .command)
         case .paste: (key, flags) = (kVK_ANSI_V, .command)
@@ -203,6 +205,26 @@ struct RemoteScrollMode {
 struct AppTarget: Codable, Equatable {
     let bundleIdentifier: String
     let name: String
+    var path: String? = nil
+
+    static func at(_ url: URL) -> Self? {
+        guard url.isFileURL else { return nil }
+        let url = url.standardizedFileURL
+        guard url.pathExtension.lowercased() == "app", let bundle = Bundle(url: url),
+              let identifier = bundle.bundleIdentifier, !identifier.isEmpty else { return nil }
+        let name = bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
+            ?? bundle.object(forInfoDictionaryKey: "CFBundleName") as? String
+            ?? url.deletingPathExtension().lastPathComponent
+        return Self(bundleIdentifier: identifier, name: name, path: url.path)
+    }
+
+    var installedURL: URL? {
+        if let path, FileManager.default.fileExists(atPath: path) {
+            let url = URL(fileURLWithPath: path)
+            if Self.at(url)?.bundleIdentifier == bundleIdentifier { return url }
+        }
+        return NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier)
+    }
 }
 
 struct TextAction: Codable, Equatable {
@@ -309,20 +331,24 @@ enum ScenePreset: String, CaseIterable, Identifiable {
     struct Binding: Identifiable {
         let button: RemoteButton
         let purpose: String
-        let shortcut: KeyboardShortcut
+        let action: RemoteAction
 
         var id: RemoteButton { button }
-        var action: RemoteAction { .keyboard(shortcut) }
-
         init(_ button: RemoteButton, _ purpose: String, _ key: Int, _ label: String) {
             self.button = button
             self.purpose = purpose
-            self.shortcut = KeyboardShortcut(option: .init(id: UInt16(key), title: label), flags: [])
+            self.action = .keyboard(KeyboardShortcut(option: .init(id: UInt16(key), title: label), flags: []))
+        }
+
+        init(_ button: RemoteButton, _ action: RemoteAction) {
+            self.button = button
+            self.purpose = action.title
+            self.action = action
         }
     }
 
     var bindings: [Binding] {
-        switch self {
+        let specialized: [Binding] = switch self {
         case .presentation: [
             .init(.left, "上一张", kVK_LeftArrow, "←"),
             .init(.right, "下一张或播放下一段动画", kVK_RightArrow, "→"),
@@ -339,13 +365,45 @@ enum ScenePreset: String, CaseIterable, Identifiable {
             .init(.down, "切换全屏", kVK_ANSI_F, "F")
         ]
         }
+        return RemoteButton.a2540Buttons.compactMap { button in
+            specialized.first { $0.button == button } ?? Self.defaultBindings.first { $0.button == button }
+        }
     }
+
+    static var defaultBindings: [Binding] { [
+        .init(.up, "向上", kVK_UpArrow, "↑"),
+        .init(.down, "向下", kVK_DownArrow, "↓"),
+        .init(.left, "向左", kVK_LeftArrow, "←"),
+        .init(.right, "向右", kVK_RightArrow, "→"),
+        .init(.select, "确认", kVK_Return, "↩"),
+        .init(.back, "返回 / 退出", kVK_Escape, "Esc"),
+        .init(.home, .system(.missionControl)),
+        .init(.playPause, .media(.playPause)),
+        .init(.mute, .media(.mute)),
+        .init(.volumeUp, .media(.volumeUp)),
+        .init(.volumeDown, .media(.volumeDown)),
+        .init(.power, .system(.sleepDisplay)),
+        .init(.siri, .system(.activateSiri))
+    ] }
 }
 
 struct RemoteConfiguration: Codable, Equatable {
     var global = ButtonMappings()
     var scenes: [AppSceneMapping] = []
     var automatic = false
+
+    mutating func completeSceneMappings() {
+        for index in scenes.indices {
+            for binding in ScenePreset.defaultBindings {
+                let scene = scenes[index]
+                let source = scene.source(for: binding.button, global: global)
+                guard source[binding.button] == nil,
+                      source.isEnabled(binding.button),
+                      scene.inherits(binding.button) || scene.overrides == nil else { continue }
+                scenes[index].edit(binding.button, global: global) { $0[binding.button] = binding.action }
+            }
+        }
+    }
 
     func scene(for id: String?) -> AppSceneMapping? {
         guard automatic, let id else { return nil }

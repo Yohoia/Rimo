@@ -20,6 +20,8 @@ enum RimoStyle {
     static let actionSidebarDivider = adaptive(light: 0xEEEEEE, dark: 0x363636)
     static let actionRadio = adaptive(light: 0xE1E2E3, dark: 0x555555)
     static let actionSearchPlaceholder = adaptive(light: 0xA2A3A5, dark: 0xA8A8A8)
+    static let actionConfigurationFill = adaptive(light: 0xF0F0F0, dark: 0x333333)
+    static let actionConfigurationLink = adaptive(light: 0x673EC8, dark: 0x00EAD0)
     static let success = adaptive(light: 0x297A3A, dark: 0x79CE88)
 
     static let cardRadius: CGFloat = 4
@@ -127,36 +129,68 @@ struct RimoButtonStyle: ButtonStyle {
 
 struct RimoSettingsView: View {
     @ObservedObject var model: RimoModel
+    @State private var showingPermissionGuide = false
+    @State private var addingRemote = false
     @State private var tab = SettingsTab.home
     @State private var selected: RemoteButton?
     @State private var deviceDetail = false
     @State private var addApp = false
+    @State private var pendingApps: [SceneTargetApp] = []
+    @State private var selectedSceneID: String?
+    @State private var deletingScene: AppSceneMapping?
     @State private var warmScene = false
     @State private var sceneReady = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var showing3D: Bool { tab == .mapping && sceneReady }
     private var editingButton: Bool { tab == .mapping && selected != nil }
+    private var showingAppPicker: Bool { deviceDetail && tab == .mapping && addApp }
+    private var showingSidebar: Bool { editingButton || showingAppPicker }
 
     var body: some View {
         GeometryReader { geometry in
             let width = ActionSidebarLayout.width(in: geometry.size.width)
             content(sidebarWidth: width)
+                .accessibilityHidden(showingPermissionGuide || (model.permissionStatusLoaded && !model.permissionOnboardingCompleted))
                 .overlay(alignment: .trailing) {
                     ZStack(alignment: .trailing) {
-                        if showing3D, let selected {
+                        if showing3D && showingAppPicker {
+                            AppSelectionSidebar(model: model, close: { addApp = false },
+                                                showsSelectionSummary: false,
+                                                onSelectionChange: { pendingApps = $0 }) { apps in
+                                selectedSceneID = apps.first?.id
+                                addApp = false
+                            }
+                            .frame(width: width)
+                            .frame(maxHeight: .infinity)
+                            .background { RimoStyle.surface.shadow(color: .black.opacity(0.08), radius: 18, x: -6) }
+                            .transition(.move(edge: .trailing))
+                        } else if showing3D, let selected {
                             actionSidebar(for: selected, width: width)
                                 .transition(.move(edge: .trailing))
                         }
                     }
-                    .animation(reduceMotion ? nil : sidebarAnimation, value: showing3D && editingButton)
+                    .animation(reduceMotion ? nil : sidebarAnimation, value: showing3D && showingSidebar)
                 }
                 .clipped()
         }
-        .sheet(isPresented: $addApp) {
-            AppScenePicker(excluded: Set(model.configuration.scenes.map(\.id))) { app in
-                _ = model.addScene(id: app.id, name: app.name)
-                tab = .scenes
+        .overlay {
+            if showingPermissionGuide || (model.permissionStatusLoaded && !model.permissionOnboardingCompleted) {
+                PermissionOnboardingView(model: model, startWithDevice: addingRemote, close: {
+                    showingPermissionGuide = false
+                    addingRemote = false
+                    selected = nil
+                    addApp = false
+                    deviceDetail = false
+                    tab = .home
+                })
+            }
+        }
+        .task {
+            while !Task.isCancelled {
+                if NSApp.isActive { model.refreshPermissions() }
+                do { try await Task.sleep(for: .seconds(1)) }
+                catch { return }
             }
         }
         .background(RimoStyle.canvas)
@@ -164,8 +198,35 @@ struct RimoSettingsView: View {
         .tint(RimoStyle.action)
         .foregroundStyle(RimoStyle.ink)
         .font(RimoStyle.body)
+        .background {
+            Button {
+                if addApp { addApp = false }
+                else if selected != nil { selected = nil }
+            } label: { Text("关闭当前编辑") }
+            .keyboardShortcut(.cancelAction)
+            .hidden()
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+        }
+        .alert("删除应用程序配置？", isPresented: Binding(get: { deletingScene != nil }, set: {
+            if !$0 { deletingScene = nil }
+        })) {
+            Button("取消", role: .cancel) { deletingScene = nil }
+            Button("删除", role: .destructive) {
+                if let deletingScene { model.removeScene(id: deletingScene.id) }
+                deletingScene = nil
+            }
+        } message: {
+            Text("删除后，「\(deletingScene?.name ?? "")」会使用全局映射。")
+        }
         .onChange(of: tab) { next in
+            if next != .mapping { addApp = false }
             if next != .home && next != .mapping { warmScene = false; sceneReady = false }
+        }
+        .onChange(of: selected) { if $0 != nil { addApp = false } }
+        .onChange(of: addApp) { if !$0 { pendingApps = [] } }
+        .onChange(of: model.configuration.scenes.map(\.id)) { ids in
+            if let selectedSceneID, !ids.contains(selectedSceneID) { self.selectedSceneID = nil }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             model.refresh()
@@ -177,12 +238,9 @@ struct RimoSettingsView: View {
     }
 
     private func actionSidebar(for button: RemoteButton, width: CGFloat) -> some View {
-        ButtonMappingEditor(model: model, button: button, inSidebar: true,
-                            close: { selected = nil }, openShortcuts: {
-                                selected = nil
-                                tab = .shortcuts
-                            })
-            .id(button)
+        ButtonMappingEditor(model: model, button: button, sceneID: selectedSceneID, inSidebar: true,
+                            close: { selected = nil })
+            .id("\(selectedSceneID ?? "global"):\(button.id)")
             .frame(width: width)
             .frame(maxHeight: .infinity)
             .background { RimoStyle.surface.shadow(color: .black.opacity(0.08), radius: 18, x: -6) }
@@ -204,6 +262,8 @@ struct RimoSettingsView: View {
                     ZStack {
                         if warmScene || tab == .mapping {
                             MappingView(model: model, selected: $selected,
+                                        sceneID: selectedSceneID,
+                                        appPickerVisible: showingAppPicker,
                                         presentationActive: showing3D, onReady: { sceneReady = true })
                                 // A near-transparent view renders its first frame while the still covers it.
                                 .opacity(showing3D ? 1 : 0.001)
@@ -212,6 +272,8 @@ struct RimoSettingsView: View {
                         }
                         DeviceHomeView(model: model) {
                             selected = nil
+                            addApp = false
+                            pendingApps = []
                             deviceDetail = true
                             tab = .mapping
                         }
@@ -220,25 +282,22 @@ struct RimoSettingsView: View {
                         .accessibilityHidden(showing3D)
                     }
                     .task { warmScene = true }
-                case .scenes:
-                    ScenesPage(model: model, openDeviceSettings: { tab = .device })
-                        .padding(.leading, deviceDetail ? 170 : 0)
-                case .shortcuts:
-                    ShortcutsPage(model: model) { button in
-                        selected = button
-                        deviceDetail = true
-                        tab = .mapping
-                    }
-                    .padding(.leading, deviceDetail ? 170 : 0)
                 case .device:
-                    DevicePage(model: model)
-                        .padding(.leading, deviceDetail ? 170 : 0)
+                    DevicePage(model: model, openPermissionGuide: { addingRemote = false; showingPermissionGuide = true })
+                        .padding(.top, deviceDetail ? -110 : 0)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay(alignment: .leading) {
                 if deviceDetail && (tab != .mapping || showing3D) {
                     deviceSidebar
+                }
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if tab == .home {
+                    HomeUpdateControl()
+                        .padding(.trailing, 32)
+                        .padding(.bottom, 24)
                 }
             }
         }
@@ -272,29 +331,28 @@ struct RimoSettingsView: View {
             Spacer(minLength: 24)
 
             HStack(spacing: 12) {
+                Button {
+                    addingRemote = true
+                    showingPermissionGuide = true
+                } label: {
+                    Label("添加遥控器", systemImage: "plus")
+                        .font(.system(size: 14, weight: .bold))
+                        .frame(minHeight: 40)
+                }
+                .buttonStyle(.plain)
+                .padding(.trailing, 16)
                 if tab != .home {
                     toolbarButton("遥控器首页", icon: "appletvremote.gen4", selected: false) {
                         selected = nil
                         tab = .home
                     }
                 }
-                toolbarButton("场景", icon: "square.3.layers.3d", selected: tab == .scenes) {
-                    tab = tab == .scenes ? .home : .scenes
-                }
-                toolbarButton("快捷指令", icon: "command", selected: tab == .shortcuts) {
-                    tab = tab == .shortcuts ? .home : .shortcuts
-                }
-
-                Rectangle().fill(RimoStyle.line).frame(width: 1, height: 24).padding(.horizontal, 8)
-                    .accessibilityHidden(true)
-
                 toolbarButton(model.paused ? "恢复映射" : "暂停映射",
                               icon: model.paused ? "play.circle" : "pause.circle", selected: model.paused) {
                     model.togglePaused()
                 }
-                toolbarButton("设备设置", icon: "gearshape", selected: tab == .device) {
-                    tab = tab == .device ? .home : .device
-                }
+                .disabled(!model.isRemoteConnected)
+                .help(model.isRemoteConnected ? (model.paused ? "恢复映射" : "暂停映射") : "连接遥控器后可启用映射")
             }
             .accessibilityElement(children: .contain)
             .accessibilityLabel("功能菜单")
@@ -309,20 +367,20 @@ struct RimoSettingsView: View {
     private func deviceHeader(sidebarWidth: CGFloat) -> some View {
         HStack(spacing: 8) {
             Button {
-                if !editingButton {
+                if !showingSidebar {
                     deviceDetail = false
                     tab = .home
                 }
                 selected = nil
+                addApp = false
             } label: {
                 Image(systemName: "arrow.left")
                     .font(.system(size: 20, weight: .medium))
                     .frame(width: 36, height: 40)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(editingButton ? "返回按键列表" : "返回首页")
-            .keyboardShortcut(editingButton ? .cancelAction : nil)
-            if !editingButton {
+            .accessibilityLabel(showingSidebar ? "返回按键列表" : "返回首页")
+            if !showingSidebar {
                 Text("Apple TV Siri Remote")
                     .font(.system(size: 30, weight: .bold))
                     .accessibilityAddTraits(.isHeader)
@@ -330,30 +388,71 @@ struct RimoSettingsView: View {
                     .minimumScaleFactor(0.75)
             }
             Spacer(minLength: 24)
-            Button { selected = nil; tab = .mapping } label: {
-                Image(systemName: "circle.grid.2x2")
-                    .font(.system(size: 21))
-                    .frame(width: 40, height: 42)
-                    .foregroundStyle(RimoStyle.action)
-                    .overlay(alignment: .bottom) {
-                        Rectangle().fill(RimoStyle.action).frame(width: 32, height: 2)
+            if tab == .mapping {
+                Button { selectedSceneID = nil; addApp = false; tab = .mapping } label: {
+                    Image(systemName: "circle.grid.2x2")
+                        .font(.system(size: 21))
+                        .frame(width: 40, height: 42)
+                        .foregroundStyle(selectedSceneID == nil && !addApp ? RimoStyle.action : RimoStyle.ink)
+                        .overlay(alignment: .bottom) {
+                            Rectangle().fill(selectedSceneID == nil && !addApp ? RimoStyle.action : .clear).frame(width: 32, height: 2)
+                        }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("全局映射")
+                .help("全局映射")
+                if !model.configuration.scenes.isEmpty || !pendingApps.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(model.configuration.scenes) { scene in
+                                SceneHeaderApp(scene: scene, selected: selectedSceneID == scene.id && !addApp,
+                                               allowsRemoval: !addApp, select: {
+                                    selectedSceneID = scene.id
+                                    addApp = false
+                                    tab = .mapping
+                                }, remove: { deletingScene = scene })
+                            }
+                            ForEach(pendingApps) { app in
+                                SceneAppIcon(id: app.id, size: 26)
+                                    .frame(width: 40, height: 42)
+                                    .opacity(0.5)
+                                    .accessibilityHidden(false)
+                                    .accessibilityLabel("\(app.name)，待添加")
+                                    .help(app.name)
+                            }
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 12)
                     }
+                    .frame(width: min(CGFloat(model.configuration.scenes.count + pendingApps.count) * 48 + 20,
+                                      showingSidebar ? 260 : 340), height: 66)
+                }
+                if model.configuration.scenes.isEmpty && pendingApps.isEmpty {
+                    Rectangle().fill(RimoStyle.line).frame(width: 1, height: 24).padding(.horizontal, 16)
+                        .accessibilityHidden(true)
+                }
+                Button { tab = .mapping; addApp.toggle() } label: {
+                    Group {
+                        if model.configuration.scenes.isEmpty && pendingApps.isEmpty {
+                            Label("添加应用程序", systemImage: "plus").labelStyle(.titleAndIcon)
+                        } else {
+                            Image(systemName: "plus").font(.system(size: 22)).frame(width: 40)
+                        }
+                    }
+                        .font(.system(size: 14, weight: .bold))
+                        .frame(minHeight: 40)
+                        .foregroundStyle(addApp ? RimoStyle.action : RimoStyle.ink)
+                        .overlay(alignment: .bottom) {
+                            Rectangle().fill(addApp ? RimoStyle.action : .clear).frame(height: 2)
+                        }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("添加应用程序")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("全局映射")
-            .help("全局映射")
-            Rectangle().fill(RimoStyle.line).frame(width: 1, height: 24).padding(.horizontal, 16)
-                .accessibilityHidden(true)
-            Button { addApp = true } label: {
-                Label("添加应用程序", systemImage: "plus")
-                    .font(.system(size: 14, weight: .bold))
-                    .frame(minHeight: 40)
-            }
-            .buttonStyle(.plain)
         }
         .padding(.leading, 44)
-        .padding(.trailing, editingButton ? sidebarWidth + max(48, sidebarWidth * 0.19) : 48)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.29), value: editingButton)
+        .padding(.trailing, showingSidebar ? sidebarWidth + max(32, sidebarWidth * 0.12) : 48)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.29), value: showingSidebar)
         .frame(height: 76)
         .padding(.top, 22)
         .padding(.bottom, 12)
@@ -364,8 +463,6 @@ struct RimoSettingsView: View {
             Spacer()
             VStack(alignment: .leading, spacing: 16) {
                 deviceSection("按钮", icon: "switch.2", destination: .mapping)
-                deviceSection("场景", icon: "square.3.layers.3d", destination: .scenes)
-                deviceSection("快捷指令", icon: "command", destination: .shortcuts)
                 deviceSection("设置", icon: "slider.horizontal.3", destination: .device)
             }
             Spacer()
@@ -374,11 +471,11 @@ struct RimoSettingsView: View {
         }
         .padding(.leading, 46)
         .frame(width: 166, alignment: .leading)
-        .offset(x: editingButton ? -176 : 0)
-        .opacity(editingButton ? 0 : 1)
-        .allowsHitTesting(!editingButton)
-        .accessibilityHidden(editingButton)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.30), value: editingButton)
+        .offset(x: showingSidebar ? -176 : 0)
+        .opacity(showingSidebar ? 0 : 1)
+        .allowsHitTesting(!showingSidebar)
+        .accessibilityHidden(showingSidebar)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.30), value: showingSidebar)
     }
 
     private func deviceSection(_ title: String, icon: String, destination: SettingsTab) -> some View {
@@ -408,27 +505,53 @@ struct RimoSettingsView: View {
         .help(title)
     }
 
-    private enum SettingsTab: CaseIterable, Identifiable {
-        case home, mapping, scenes, shortcuts, device
-        var id: Self { self }
-        var title: String {
-            switch self {
-            case .home: "首页"
-            case .mapping: "映射"
-            case .scenes: "场景"
-            case .shortcuts: "快捷指令"
-            case .device: "设备设置"
+    private enum SettingsTab {
+        case home, mapping, device
+    }
+}
+
+private struct SceneHeaderApp: View {
+    let scene: AppSceneMapping
+    let selected: Bool
+    let allowsRemoval: Bool
+    let select: () -> Void
+    let remove: () -> Void
+    @State private var hovering = false
+    @FocusState private var focused: Bool
+    @FocusState private var removalFocused: Bool
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Button(action: select) {
+                SceneAppIcon(id: scene.id, size: 26)
+                    .frame(width: 40, height: 42)
+                    .background(hovering ? RimoStyle.action.opacity(0.06) : .clear, in: RimoStyle.controlShape)
+                    .overlay(alignment: .bottom) {
+                        Rectangle().fill(selected ? RimoStyle.action : .clear).frame(width: 32, height: 2)
+                    }
+            }
+            .buttonStyle(.plain)
+            .focused($focused)
+            .accessibilityLabel("编辑\(scene.name)的应用程序配置")
+            .accessibilityAddTraits(selected ? .isSelected : [])
+            .help(scene.name)
+            if allowsRemoval {
+                Button(action: remove) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 22, height: 22)
+                        .background(RimoStyle.action, in: Circle())
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .focused($removalFocused)
+                .accessibilityLabel("删除\(scene.name)的应用程序配置")
+                .opacity(hovering || focused || removalFocused ? 1 : 0.001)
+                .offset(x: 8, y: -8)
             }
         }
-        var icon: String {
-            switch self {
-            case .home: "house"
-            case .mapping: "square.grid.2x2"
-            case .scenes: "square.3.layers.3d"
-            case .shortcuts: "command"
-            case .device: "gearshape"
-            }
-        }
+        .onHover { hovering = $0 }
     }
 }
 
@@ -523,6 +646,87 @@ private struct DeviceBatteryBadge: View {
     }
 }
 
+private struct HomeUpdateControl: View {
+    @State private var checking = false
+    @State private var hovering = false
+    @State private var message: String?
+    @State private var releaseURL: URL?
+
+    private var version: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.0"
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text("Rimo \(version)")
+                .font(.system(size: 11))
+                .foregroundStyle(RimoStyle.muted.opacity(0.8))
+                .fixedSize()
+            Button {
+                checking = true
+                Task { await checkForUpdates() }
+            } label: {
+                Group {
+                    if checking { ProgressView().controlSize(.small) }
+                    else {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 11))
+                            .foregroundStyle(hovering ? RimoStyle.action : RimoStyle.muted.opacity(0.8))
+                    }
+                }
+                .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .onHover { hovering = $0 }
+            .disabled(checking)
+            .accessibilityLabel(checking ? "正在检查更新" : "检查 Rimo 更新")
+            .help("检查更新")
+        }
+        .alert("Rimo 更新", isPresented: Binding(get: { message != nil }, set: {
+            if !$0 { message = nil; releaseURL = nil }
+        })) {
+            if let releaseURL {
+                Button("查看新版本") { NSWorkspace.shared.open(releaseURL) }
+            }
+            Button("好", role: .cancel) { message = nil; releaseURL = nil }
+        } message: {
+            Text(message ?? "")
+        }
+    }
+
+    @MainActor private func checkForUpdates() async {
+        defer { checking = false }
+        releaseURL = nil
+        do {
+            let endpoint = URL(string: "https://api.github.com/repos/Yohoia/Rimo/releases/latest")!
+            var request = URLRequest(url: endpoint, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
+            request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let response = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+            if response.statusCode == 404 {
+                message = "当前版本 \(version)。暂未找到可用的正式发布版本。"
+                return
+            }
+            guard response.statusCode == 200 else { throw URLError(.badServerResponse) }
+            let release = try JSONDecoder().decode(Release.self, from: data)
+            let latest = release.tag_name.hasPrefix("v") ? String(release.tag_name.dropFirst()) : release.tag_name
+            if latest.compare(version, options: .numeric) == .orderedDescending {
+                message = "发现新版本 \(latest)，当前版本为 \(version)。"
+                // Open the project's release page rather than a server-supplied URL.
+                releaseURL = URL(string: "https://github.com/Yohoia/Rimo/releases/latest")
+            } else {
+                message = "当前版本 \(version) 已是最新正式版本。"
+            }
+        } catch {
+            message = "检查更新失败，请稍后重试。\n\(error.localizedDescription)"
+        }
+    }
+
+    private struct Release: Decodable {
+        let tag_name: String
+    }
+}
+
 private struct HomeToolbarStyle: ButtonStyle {
     let selected: Bool
 
@@ -534,13 +738,14 @@ private struct HomeToolbarStyle: ButtonStyle {
         let configuration: ButtonStyle.Configuration
         let selected: Bool
         @State private var hovered = false
+        @Environment(\.isEnabled) private var enabled
         @Environment(\.isFocused) private var focused
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
         var body: some View {
             configuration.label
-                .foregroundStyle(selected ? RimoStyle.action : RimoStyle.ink)
-                .background(hovered || configuration.isPressed ? RimoStyle.line.opacity(0.55) : .clear,
+                .foregroundStyle(enabled ? (selected ? RimoStyle.action : RimoStyle.ink) : RimoStyle.quiet)
+                .background(enabled && (hovered || configuration.isPressed) ? RimoStyle.line.opacity(0.55) : .clear,
                             in: RimoStyle.controlShape)
                 .overlay {
                     RimoStyle.controlShape.strokeBorder(focused ? RimoStyle.action : .clear, lineWidth: 2)

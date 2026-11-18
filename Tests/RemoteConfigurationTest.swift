@@ -32,6 +32,7 @@ struct RemoteConfigurationTest {
         try verifyPresets(globalAction: globalAction, otherAction: sceneAction)
         try verifyTriggerMappings(single: globalAction, additional: sceneAction)
         try verifyExpandedActions()
+        try verifyApplicationTargets()
         verifyKeyboardCatalog()
         try verifyScrollMode()
         try verifyOtherActions()
@@ -79,7 +80,7 @@ struct RemoteConfigurationTest {
     }
 
     static func verifyOtherActions() throws {
-        let categories = SystemAction.windowActions + SystemAction.screenActions + SystemAction.editingActions + SystemAction.otherActions
+        let categories = SystemAction.windowActions + SystemAction.systemActions + SystemAction.editingActions + SystemAction.otherActions
         precondition(Set(categories).count == categories.count)
         precondition(Set(categories) == Set(SystemAction.allCases))
         var signatures: Set<String> = []
@@ -87,6 +88,8 @@ struct RemoteConfigurationTest {
             if let key = action.shortcut {
                 precondition(signatures.insert("\(key.keyCode):\(key.modifiers)").inserted)
             } else { precondition(action == .toggleScrollMode) }
+        }
+        for action in categories {
             let value = RemoteAction.system(action)
             let restored = try JSONDecoder().decode(RemoteAction.self, from: JSONEncoder().encode(value))
             precondition(restored == value)
@@ -143,20 +146,21 @@ struct RemoteConfigurationTest {
                         preconditionFailure("Missing preset action for \(button)")
                     }
                     precondition(action.keyCode == keyCode && action.modifiers == 0)
-                } else {
-                    precondition(config.scene(for: id)?.inherits(button) == true)
+                } else if RemoteButton.a2540Buttons.contains(button) {
+                    precondition(config.action(for: button, in: id) != nil)
+                    precondition(config.scene(for: id)?.inherits(button) == false)
                 }
             }
         }
-        precondition(config.action(for: .playPause, in: app) == globalAction)
-        precondition(config.action(for: .volumeUp, in: app) == nil)
+        precondition(config.action(for: .playPause, in: app) == .media(.playPause))
+        precondition(config.action(for: .volumeUp, in: app) == .media(.volumeUp))
         config.global[.playPause] = otherAction
-        precondition(config.scenes[0].resolved(global: config.global)[.playPause] == otherAction)
-        precondition(config.action(for: .playPause, in: app) == otherAction)
+        precondition(config.scenes[0].resolved(global: config.global)[.playPause] == .media(.playPause))
+        precondition(config.action(for: .playPause, in: app) == .media(.playPause))
 
         let global = config.global
         config.scenes[0].edit(.playPause, global: global) { $0.setEnabled(false, for: .playPause) }
-        precondition(config.scenes[0].buttons[.playPause] == otherAction)
+        precondition(config.scenes[0].buttons[.playPause] == .media(.playPause))
         precondition(config.action(for: .playPause, in: app) == nil)
         config.scenes[0].followGlobal(.playPause)
         precondition(config.action(for: .playPause, in: app) == otherAction)
@@ -173,15 +177,28 @@ struct RemoteConfigurationTest {
         config.apply(.presentation, to: legacyID, name: "Renamed")
         let legacy = config.scenes.last!
         precondition(!legacy.enabled && legacy.name == "Existing" && !legacy.canFollowGlobal)
-        precondition(legacy.buttons[.playPause] == globalAction && !legacy.buttons.isEnabled(.playPause))
+        precondition(legacy.buttons[.playPause] == .media(.playPause) && legacy.buttons.isEnabled(.playPause))
         precondition(legacy.buttons[.left] != otherAction && legacy.buttons.isEnabled(.left))
         precondition(!legacy.inherits(.volumeUp))
 
         let saved = try JSONEncoder().encode(config)
         let restored = try JSONDecoder().decode(RemoteConfiguration.self, from: saved)
         precondition(restored == config)
-        precondition(restored.scene(for: app)?.inherits(.volumeUp) == true)
+        precondition(restored.scene(for: app)?.inherits(.volumeUp) == false)
         precondition(restored.action(for: .playPause, in: app) == nil)
+
+        var partial = RemoteConfiguration()
+        var oldPreset = AppSceneMapping(id: "partial", name: "Partial", buttons: ButtonMappings(), overrides: [])
+        oldPreset.edit(.up, global: partial.global) { $0[.up] = globalAction }
+        oldPreset.edit(.back, global: partial.global) { $0[.back] = nil }
+        partial.scenes = [oldPreset]
+        partial.completeSceneMappings()
+        precondition(partial.scenes[0].buttons[.up] == globalAction)
+        precondition(partial.scenes[0].buttons[.back] == nil)
+        precondition(partial.scenes[0].buttons[.volumeUp] == .media(.volumeUp))
+        let completed = partial
+        partial.completeSceneMappings()
+        precondition(partial == completed)
     }
 
     static func verifyTriggerMappings(single: RemoteAction, additional: RemoteAction) throws {
@@ -241,6 +258,29 @@ struct RemoteConfigurationTest {
         precondition(ScrollAction(direction: .right, amount: 80).deltas.horizontal == -80)
         precondition(SystemAction.missionControl.shortcut?.keyCode == UInt16(kVK_UpArrow))
         print("Expanded actions: persistence, scene inheritance, legacy keys, held output and scroll bounds passed.")
+    }
+
+    static func verifyApplicationTargets() throws {
+        let old = Data(#"{"bundleIdentifier":"com.apple.TextEdit","name":"文本编辑"}"#.utf8)
+        let legacy = try JSONDecoder().decode(AppTarget.self, from: old)
+        precondition(legacy.path == nil && legacy.installedURL?.lastPathComponent == "TextEdit.app")
+
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let app = directory.appendingPathComponent("Example App.app", isDirectory: true)
+        let contents = app.appendingPathComponent("Contents", isDirectory: true)
+        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        let info = ["CFBundleIdentifier": "test.rimo.application", "CFBundleName": "Example App", "CFBundlePackageType": "APPL"]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+            .write(to: contents.appendingPathComponent("Info.plist"))
+        let selected = AppTarget.at(app)
+        precondition(selected?.bundleIdentifier == info["CFBundleIdentifier"])
+        precondition(selected?.installedURL?.path == app.path)
+        precondition(AppTarget.at(contents) == nil)
+
+        let action = RemoteAction.openApp(selected!)
+        let restored = try JSONDecoder().decode(RemoteAction.self, from: JSONEncoder().encode(action))
+        precondition(restored == action)
     }
 
     static func verifyRemotePresses() {

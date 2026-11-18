@@ -13,7 +13,7 @@ enum RemotePresentation {
     }
 }
 
-/// A single orthographic projection drives the camera, hotspot hit areas and callouts.
+/// A single orthographic projection drives the camera, button hit areas and outlines.
 struct RemoteProjection: Equatable {
     let size: CGSize
     let unit: CGFloat
@@ -73,8 +73,8 @@ struct RemoteModelView: View {
     let recentlyPressed: RemoteButton?
     let pose: RemotePose
     let projection: RemoteProjection
-    let calloutOpacity: Double
-    let compactCallout: Bool
+    let outlineOpacity: Double
+    var mappedButtons: Set<RemoteButton> = []
     let canOrbit: Bool
     let onOrbit: (RemoteOrbitChange) -> Void
     let onSelect: (RemoteButton) -> Void
@@ -99,16 +99,21 @@ struct RemoteModelView: View {
             ForEach(Hotspot.all) { hotspot in
                 if let placement = hotspot.placement(in: projection, pose: pose) {
                     let isSelected = selected == hotspot.id
-                    let callout = isSelected && calloutOpacity > 0
-                        ? hotspot.callout(in: projection, pose: pose, placement: placement, compact: compactCallout)
-                        : nil
-                    KeyButton(button: hotspot.id, placement: placement, callout: callout,
-                              calloutOpacity: calloutOpacity, selected: isSelected,
+                    KeyButton(button: hotspot.id, placement: placement,
+                              outlineOpacity: outlineOpacity, selected: isSelected,
+                              mapped: mappedButtons.contains(hotspot.id),
                               recentlyPressed: recentlyPressed == hotspot.id) {
                         guard dragOrigin == nil, lastDragEnd.timeIntervalSinceNow < -0.12 else { return }
                         onSelect(hotspot.id)
                     }
                     .zIndex(isSelected ? 1 : 0)
+                    if isSelected, outlineOpacity > 0 {
+                        selectedLabel(for: hotspot.id, placement: placement)
+                            .opacity(outlineOpacity)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                            .zIndex(2)
+                    }
                 }
             }
         }
@@ -125,7 +130,7 @@ struct RemoteModelView: View {
         .onChange(of: canOrbit) { if !$0 { dragOrigin = nil } }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("A2540 遥控器")
-        .accessibilityHint(canOrbit ? "点击实体按键放大编辑，也可以拖动旋转。" : "选择标签或实体按键来编辑映射。")
+        .accessibilityHint(canOrbit ? "点击实体按键放大编辑，也可以拖动旋转。" : "选择实体按键来编辑映射。")
         .accessibilityActions {
             if canOrbit {
                 Button("向左旋转") { turn(-28) }
@@ -133,6 +138,39 @@ struct RemoteModelView: View {
                 Button("回到默认角度") { onOrbit(.reset) }
             }
         }
+    }
+
+    private func selectedLabel(for button: RemoteButton, placement: Hotspot.Placement) -> some View {
+        let title: String = switch button {
+        case .home: "主屏幕"
+        case .playPause: "播放/暂停"
+        case .siri: "Siri 侧键"
+        default: button.title
+        }
+        let mapped = mappedButtons.contains(button)
+        let key = placement.outlineBounds
+        let width = ceil((title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 14)]).width) + 24
+        let height: CGFloat = 36
+        let center: CGPoint
+        switch button {
+        case .up:
+            center = CGPoint(x: key.midX, y: key.minY - 12 - height / 2)
+        case .down:
+            center = CGPoint(x: key.midX, y: key.maxY + 12 + height / 2)
+        case .left, .select, .back, .playPause, .mute:
+            let left = button == .select ? Self.bodyBounds(in: projection, pose: pose).minX : key.minX
+            center = CGPoint(x: left - 12 - width / 2, y: key.midY)
+        default:
+            center = CGPoint(x: key.maxX + 12 + width / 2, y: key.midY)
+        }
+        return Text(title)
+            .font(.system(size: 14))
+            .foregroundStyle(mapped ? RimoStyle.assignmentInk : Color.black)
+            .frame(width: width, height: height)
+            .background(mapped ? RimoStyle.assignmentAccent : .white, in: RoundedRectangle(cornerRadius: 4))
+            .shadow(color: .black.opacity(0.10), radius: 10, x: 6, y: 6)
+            .position(x: min(max(width / 2 + 4, center.x), projection.size.width - width / 2 - 4),
+                      y: min(max(height / 2 + 4, center.y), projection.size.height - height / 2 - 4))
     }
 
     func turn(_ amount: CGFloat) {
@@ -155,89 +193,47 @@ struct RemoteModelView: View {
         return points.reduce(CGRect.null) { $0.union(CGRect(origin: $1, size: .zero)) }
     }
 
-    // Preserve the focused camera framing and leave room for a label on either side.
-    nonisolated static let calloutMargins: CGFloat = 192
-
-    private struct Callout {
-        let title: String
-        let label: CGRect
-        let fontSize: CGFloat
-    }
-
-    private struct ActiveCallout: View {
-        let callout: Callout
-        let origin: CGPoint
-        @Environment(\.colorScheme) private var scheme
-
-        var body: some View {
-            let shape = RoundedRectangle(cornerRadius: 4)
-            Text(callout.title)
-                .font(.system(size: callout.fontSize))
-                .foregroundStyle(RimoStyle.assignmentInk)
-                .lineLimit(1)
-                .frame(width: callout.label.width, height: callout.label.height)
-                .background(RimoStyle.assignmentAccent, in: shape)
-                .overlay { shape.strokeBorder(RimoStyle.assignmentBorder, lineWidth: 1) }
-                .shadow(color: .black.opacity(scheme == .dark ? 0.20 : 0.10), radius: 10, x: 6, y: 6)
-                .position(x: callout.label.midX - origin.x, y: callout.label.midY - origin.y)
-        }
-    }
+    // Preserve the existing focused camera framing.
+    nonisolated static let focusedHorizontalInset: CGFloat = 192
 
     private struct KeyButton: View {
         let button: RemoteButton
         let placement: Hotspot.Placement
-        let callout: Callout?
-        let calloutOpacity: Double
+        let outlineOpacity: Double
         let selected: Bool
+        let mapped: Bool
         let recentlyPressed: Bool
         let action: () -> Void
         @FocusState private var focused: Bool
-        private let selectionOutline = Color(red: 99.0 / 255, green: 102.0 / 255, blue: 241.0 / 255)
 
         var body: some View {
-            let frame = callout.map { placement.bounds.union($0.label) } ?? placement.bounds
-            let hitArea = placement.hitArea.path.offsetBy(dx: placement.bounds.minX - frame.minX,
-                                                         dy: placement.bounds.minY - frame.minY)
             Button(action: action) {
-                ZStack(alignment: .topLeading) {
-                    placement.outline.fill(.clear)
-                        .overlay {
-                            if callout != nil {
-                                placement.outline
-                                    .stroke(selectionOutline, style: StrokeStyle(lineWidth: 2.5, lineJoin: .round))
-                                    .shadow(color: selectionOutline.opacity(0.22), radius: 3)
-                                    .opacity(calloutOpacity)
-                                    .allowsHitTesting(false)
-                            } else if recentlyPressed || focused {
-                                placement.outline.edge(.white, width: 2)
-                                    .allowsHitTesting(false)
-                            }
+                placement.outline.fill(.clear)
+                    .overlay {
+                        if outlineOpacity > 0 {
+                            placement.outline
+                                .stroke(mapped ? RimoStyle.assignmentAccent : .white,
+                                        style: StrokeStyle(lineWidth: selected || focused ? 3 : 2, lineJoin: .round))
+                                .opacity(outlineOpacity)
+                                .allowsHitTesting(false)
+                        } else if focused {
+                            placement.outline.edge(.white, width: 2)
+                                .allowsHitTesting(false)
                         }
-                        .frame(width: placement.bounds.width, height: placement.bounds.height)
-                        .position(x: placement.bounds.midX - frame.minX, y: placement.bounds.midY - frame.minY)
-
-                    if let callout {
-                        ActiveCallout(callout: callout, origin: frame.origin)
-                            .opacity(calloutOpacity)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
+                        if recentlyPressed {
+                            placement.outline.fill(.white.opacity(0.20))
+                                .allowsHitTesting(false)
+                        }
                     }
-                }
-                .frame(width: frame.width, height: frame.height)
-                .contentShape(ProjectedShape(path: Path { path in
-                    path.addPath(hitArea)
-                    if let callout, calloutOpacity >= 0.75 {
-                        path.addRoundedRect(in: callout.label.offsetBy(dx: -frame.minX, dy: -frame.minY),
-                                            cornerSize: CGSize(width: 4, height: 4))
-                    }
-                }))
+                    .frame(width: placement.bounds.width, height: placement.bounds.height)
+                    .contentShape(placement.hitArea)
             }
             .buttonStyle(.plain)
             .focused($focused)
             .accessibilityLabel(button.title)
             .accessibilityAddTraits(selected ? .isSelected : [])
-            .help(selected ? "\(button.title) · 关闭编辑" : "\(button.title) · 点击编辑")
-            .position(x: frame.midX, y: frame.midY)
+            .help(selected ? "\(button.title) · 正在编辑" : "\(button.title) · 点击编辑")
+            .position(x: placement.bounds.midX, y: placement.bounds.midY)
         }
     }
 
@@ -261,6 +257,7 @@ struct RemoteModelView: View {
         let radius: CGFloat
         let surfaceY: Float
         let contour: Contour
+
 
         enum Contour {
             case rounded, ring(Double), rocker(top: Bool)
@@ -344,49 +341,6 @@ struct RemoteModelView: View {
             return Placement(bounds: bounds,
                              outline: .init(path: path.offsetBy(dx: -bounds.minX, dy: -bounds.minY)),
                              hitArea: .init(path: hitArea.offsetBy(dx: -bounds.minX, dy: -bounds.minY)))
-        }
-
-        func callout(in viewport: RemoteProjection, pose: RemotePose, placement: Placement, compact: Bool) -> Callout {
-            let title: String = switch id {
-            case .home: "主屏幕"
-            case .playPause: "播放/暂停"
-            case .siri: "Siri 侧键"
-            default: id.title
-            }
-            let isLeft = [RemoteButton.left, .select, .down, .back, .playPause, .mute].contains(id)
-            let key = placement.outlineBounds
-            let markerOffset: CGFloat = switch id {
-            case .power, .back, .home, .playPause, .mute, .volumeUp, .volumeDown: key.width * 0.42
-            case .left, .right: key.width * 0.26
-            default: 0
-            }
-            let marker = CGPoint(x: key.midX + (isLeft ? -markerOffset : markerOffset), y: key.midY)
-            let fontSize: CGFloat = compact ? 11 : 14
-            let textWidth = (title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: fontSize)]).width
-            let width = ceil(textWidth) + (compact ? 18 : 26)
-            let height: CGFloat = compact ? 28 : 42
-            let x: CGFloat
-            let y: CGFloat
-            switch id {
-            case .up:
-                x = marker.x - width / 2
-                y = marker.y - 20 - height
-            case .select, .down:
-                // Keep the label off the surrounding direction keys.
-                let body = RemoteModelView.bodyBounds(in: viewport, pose: pose)
-                x = body.minX - 12 - width
-                y = marker.y - height / 2
-            case .right:
-                let body = RemoteModelView.bodyBounds(in: viewport, pose: pose)
-                x = max(marker.x + 24, body.maxX + 14)
-                y = marker.y - height / 2
-            default:
-                x = isLeft ? marker.x - 20 - width : marker.x + 24
-                y = marker.y - height / 2
-            }
-            let frame = CGRect(x: max(4, min(x, viewport.size.width - width - 4)),
-                               y: max(4, min(y, viewport.size.height - height - 4)), width: width, height: height)
-            return Callout(title: title, label: frame, fontSize: fontSize)
         }
 
         static let all: [Self] = [
