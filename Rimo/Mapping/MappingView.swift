@@ -486,7 +486,7 @@ struct ButtonMappingEditor: View {
                 if groups.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("没有符合的动作").font(RimoStyle.title)
-                        hint("试试「自定义」「滚动」或「播放」。")
+                        hint("试试「快捷键」「滚动」或「播放」。")
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(34)
@@ -1281,7 +1281,35 @@ struct ButtonMappingEditor: View {
         }
 
         func matches(_ query: String) -> Bool {
-            title.localizedStandardContains(query) || kind.title.localizedStandardContains(query)
+            let query = query.filter { !$0.isWhitespace }
+            return ([title, kind.title] + searchAliases).contains { name in
+                name.filter { !$0.isWhitespace }.localizedStandardContains(query)
+            }
+        }
+
+        private var searchAliases: [String] {
+            switch self {
+            case .configure(.openApp): ["打开应用程序"]
+            case .configure(.keyboard): ["自定义"]
+            case .media(.nextTrack): ["下一首"]
+            case .media(.previousTrack): ["上一首"]
+            case .media(.volumeUp): ["增大音量"]
+            case .media(.volumeDown): ["减小音量"]
+            case .system(.appWindows): ["当前 App 的全部窗口"]
+            case .system(.previousDesktop): ["上一个桌面"]
+            case .system(.nextDesktop): ["下一个桌面"]
+            case .system(.showDesktop): ["显示桌面", "隐藏桌面"]
+            case .system(.lockScreen): ["锁定屏幕", "锁屏"]
+            case .system(.back): ["网页后退"]
+            case .system(.forward): ["网页前进"]
+            case .system(.newTab): ["新建标签页"]
+            case .system(.zoomIn): ["放大页面"]
+            case .system(.zoomOut): ["缩小页面"]
+            case .system(.resetZoom): ["重置页面缩放"]
+            case .system(.captureScreen): ["全屏截屏"]
+            case .system(.emoji): ["表情与符号"]
+            default: []
+            }
         }
     }
 
@@ -1290,7 +1318,7 @@ struct ButtonMappingEditor: View {
         var id: Self { self }
         var title: String {
             switch self {
-            case .keyboard: "自定义"
+            case .keyboard: "键盘快捷键"
             case .mouse: "鼠标点击"
             case .scroll: "滚动"
             case .media: "媒体控制"

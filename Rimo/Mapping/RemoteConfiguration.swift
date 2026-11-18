@@ -41,9 +41,9 @@ enum MouseAction: String, Codable, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .left: "左键单击"
-        case .right: "右键单击"
+        case .right: "右键点击"
         case .doubleClick: "左键双击"
-        case .middle: "中键单击"
+        case .middle: "中键"
         }
     }
 }
@@ -91,12 +91,12 @@ enum MediaAction: String, Codable, CaseIterable, Identifiable {
     var id: Self { self }
     var title: String {
         switch self {
-        case .playPause: "播放 / 暂停"
-        case .nextTrack: "下一首"
-        case .previousTrack: "上一首"
-        case .volumeUp: "增大音量"
-        case .volumeDown: "减小音量"
-        case .mute: "静音 / 取消静音"
+        case .playPause: "播放/暂停"
+        case .nextTrack: "下一个"
+        case .previousTrack: "上一个"
+        case .volumeUp: "音量升高"
+        case .volumeDown: "音量降低"
+        case .mute: "扬声器静音/取消静音"
         }
     }
     var keyCode: Int {
@@ -128,11 +128,11 @@ enum SystemAction: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .toggleScrollMode: "滚动模式"
         case .missionControl: "调度中心"
-        case .appWindows: "当前 App 的全部窗口"
-        case .previousDesktop: "上一个桌面"
-        case .nextDesktop: "下一个桌面"
-        case .showDesktop: "显示桌面"
-        case .lockScreen: "锁定屏幕"
+        case .appWindows: "App Exposé"
+        case .previousDesktop: "桌面向左"
+        case .nextDesktop: "桌面向右"
+        case .showDesktop: "显示/隐藏桌面"
+        case .lockScreen: "锁定"
         case .sleepDisplay: "关闭显示器"
         case .copy: "复制"
         case .cut: "剪切"
@@ -141,17 +141,17 @@ enum SystemAction: String, Codable, CaseIterable, Identifiable {
         case .redo: "重做"
         case .selectAll: "全选"
         case .find: "查找"
-        case .back: "网页后退"
-        case .forward: "网页前进"
-        case .newTab: "新建标签页"
-        case .previousTab: "上一个标签页"
-        case .nextTab: "下一个标签页"
-        case .zoomIn: "放大页面"
-        case .zoomOut: "缩小页面"
-        case .resetZoom: "重置页面缩放"
+        case .back: "后退"
+        case .forward: "前进"
+        case .newTab: "新建浏览器标签页"
+        case .previousTab: "上一个标签页（左）"
+        case .nextTab: "下一个标签页（右）"
+        case .zoomIn: "放大"
+        case .zoomOut: "缩小"
+        case .resetZoom: "缩放重置"
         case .captureScreen: "全屏截图"
         case .screenshotTools: "打开截屏工具栏"
-        case .emoji: "表情与符号"
+        case .emoji: "表情符号"
         }
     }
     var shortcut: KeyboardShortcut? {
