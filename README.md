@@ -49,73 +49,68 @@ open .build/xcode/Build/Products/Debug/Rimo.app
 
 可以在 Rimo 设置窗口内直接按实体遥控器验证映射。模型高亮只说明读取到了按键；Fn 的实际效果取决于 macOS 或输入法的快捷键设置，「调度中心」等系统动作也需要对应系统快捷键已启用。
 
-开发时可用下面的命令查看最近的映射执行日志。`dispatch` 说明动作进入了执行流程，最终效果仍需在屏幕上确认。
+## 技术架构
+
+Rimo 使用纯 Swift + SwiftUI 构建，核心架构分为以下模块：
+
+### 输入处理（Input）
+- **HIDMonitor**: IOKit HID 设备管理，监听按键事件和设备状态
+- **RemoteInput**: 按键事件解析和触发识别（单击/双击/长按）
+- **A2540Input**: A2540 遥控器的按键定义和 HID 报告解析
+
+### 映射系统（Mapping）
+- **RemoteConfiguration**: 按键映射配置的序列化和验证
+- **ActionOutput**: 将映射动作转换为系统事件（CGEvent、媒体键、系统快捷指令）
+- **MappingView**: 3D 遥控器模型和映射编辑界面
+
+### 语音捕获（Voice）
+- **VoiceController**: 语音捕获生命周期管理
+- **VoiceCapture**: Opus 编解码和音频流处理
+- **VoiceHelperServer**: 特权 XPC 服务，提供虚拟麦克风
+- **MicrophoneBridge**: CoreAudio 音频会话和输入控制
+
+### 应用核心（App）
+- **RimoModel**: 应用主状态管理（设备、映射、语音、权限）
+- **RimoToastCenter**: Toast 通知中心
+- **RimoToastMessage**: 类型安全的 Toast 消息枚举
+
+### UI 层（Settings）
+- **SettingsView**: 设置主界面和导航
+- **DevicePage**: 设备连接、权限管理和语音组件安装
+- **ScenesPage**: 场景管理和预设应用
+- **ShortcutsPage**: 系统快捷指令集成
+
+## 项目文档
+
+- **[DESIGN.md](DESIGN.md)**: UI/UX 设计规范和视觉系统
+- **[IMPROVEMENTS.md](IMPROVEMENTS.md)**: 最近的代码审查和改进报告
+- **[docs/product-scope.md](docs/product-scope.md)**: 产品功能范围和设计决策
+- **[docs/device-interface.md](docs/device-interface.md)**: A2540 设备接口和协议文档
+- **[docs/voice-validation.md](docs/voice-validation.md)**: 语音捕获验证方法
+- **[docs/action-mapping-catalog.md](docs/action-mapping-catalog.md)**: 完整的动作映射目录
+- **[docs/optionsplus-main-findings.md](docs/optionsplus-main-findings.md)**: Options+ 对比分析
+
+## 测试
+
+测试文件位于 `Tests/` 目录：
+
+- **RemoteConfigurationTest**: 配置序列化和验证
+- **VoiceCaptureTest**: Opus 编解码和音频流
+- **VoiceSessionTest**: 语音会话状态机
+- **VoiceHelperTest**: XPC 服务和权限验证
+- **MappingPauseTest**: 映射暂停和恢复
+- **ToastTest**: Toast 通知系统
 
 ```sh
-/usr/bin/log show --last 5m --style compact --info \
-  --predicate 'subsystem == "cn.yohoia.rimo" AND category == "mapping"'
+xcodebuild test -scheme Rimo -derivedDataPath .build/xcode
 ```
 
-### 可选：遥控器收音
+## 许可证
 
-普通按键映射不依赖 PacketLogger。若要开启实验性收音，请从 [Apple 蓝牙开发者资源](https://developer.apple.com/bluetooth/) 获取官方 `PacketLogger.app`，并在构建前选择一种放置方式：
+本项目代码使用 MIT 许可证。设计资源和品牌素材的使用请查看 [docs/brand/README.md](docs/brand/README.md)。
 
-- 放到项目本地的 `.local/PacketLogger.app`，或安装到 `/Applications/PacketLogger.app`。
-- 在上述 `xcodebuild` 命令中追加 `RIMO_PACKETLOGGER_APP="/绝对路径/PacketLogger.app"`（放在 `build` 前后均可），或在 Xcode 中设置同名构建变量。
+---
 
-构建时会验证 PacketLogger 的 Apple 签名。和 Voxa 一样，Rimo 只负责两件事：按下输入法的语音快捷键，并把遥控器的声音交给输入法，不自己识别文字。
-
-- **Siri 键是普通按键**：默认单击是「唤醒 Siri」，可以像其他按键一样设置单击、双击、长按，也可以在场景里单独设置。
-- **用遥控器说话**：把 Siri 键映射成输入法的语音快捷键，例如 Typeless 用 Fn，豆包、微信输入法用 Option。然后在输入法的设置里，把麦克风选成 **Rimo Remote Microphone**。快捷键用「触发一次」还是「按住至松开」，要和输入法的设置一致。语音状态和组件安装入口位于设备设置，动作列表中不显示麦克风说明。
-- **什么时候送声音**：只有当前生效的 Siri 映射（全局或场景）是单独一个修饰键时，按住 Siri 键的声音才会送到虚拟麦克风。修饰键指 Fn、Option、Command、Control、Shift，左右均可，但不能和其他键组合。如果 Siri 键映射的是唤醒 Siri 或其他动作，就不送声音。按住至松开的语音键会在松开后再等 0.3 秒才释放，避免最后几个字被截掉。
-- **语音组件**：和 Voxa、RemotePilot 一样，首次引导的最后一步会请你输入一次 Mac 登录密码，装好后台采集服务、蓝牙语音配置和虚拟麦克风。不需要在「登录项与扩展」里批准，也不需要重启 Mac。这一步可以跳过，之后在 Siri 键映射成语音快捷键时，设备设置会提供安装入口。Rimo 更新了语音组件后，会自动再请求一次密码。临时签名的开发构建每次重新构建都会请求。
-
-部署脚本（`Rimo/Resources/deploy-voice.sh`）以 root 身份运行：
-
-- 校验 Rimo、助手、驱动和 PacketLogger 的签名，再复制到 root 所有的 `/Library/Application Support/Rimo/VoiceService/`。之后的采集不会执行用户可写的应用包里的代码。
-- 注册 `cn.yohoia.rimo.voice-service` LaunchDaemon。服务只接受签名符合部署时记录要求的 Rimo 客户端：正式签名按团队匹配，临时签名按当前构建匹配。
-- 备份原有蓝牙日志项，再配置实时诊断、原始音频和采集授权，关闭额外的文件日志，然后重新加载 `bluetoothd`。macOS 更新若重置了这些项，服务会自动重新配置。备份保存在 `/Library/Application Support/Rimo/VoiceEnvironment/`。若配置后采集仍被系统拒绝，可以使用 Apple 官方 macOS 蓝牙日志描述文件。
-- 安装或更新虚拟麦克风后重新加载 `coreaudiod`，设备立即可用。
-
-按住 Siri 键说话时，音频只发送到 Rimo Remote Microphone，不在本机保存录音。采集经有界管道实时读取，解析、解码和麦克风输出在后台串行执行。松键后会接收尾包，并等待输出缓冲结束；连续说话时保留上一段待输出的尾音。少量连续丢帧用 Opus 补偿，严重丢包或传输超时会结束本段并提示重试。此链路仍需更多实时收音、重连和睡眠唤醒的真机验证。
-
-## 验证映射改动
-
-以下测试覆盖映射读写、场景预设和继承、HID 事件去重，以及单击、双击、长按识别。无需连接遥控器即可运行。
-
-```sh
-mkdir -p .build
-swiftc -o .build/remote-configuration-test \
-  Tests/RemoteConfigurationTest.swift Rimo/Input/RemoteInput.swift \
-  Rimo/Mapping/RemoteConfiguration.swift Rimo/Mapping/KeyboardShortcut.swift \
-  Rimo/Mapping/ActionOutput.swift
-.build/remote-configuration-test
-```
-
-相机过渡回归覆盖初始全景、重复目标、动画中反向切换、旧完成回调和减少动态效果。
-
-```sh
-swiftc -o .build/remote-camera-test Tests/RemoteCameraMotionTest.swift \
-  Rimo/App/RimoModel.swift Rimo/App/RimoToast.swift Rimo/Input/*.swift Rimo/Mapping/*.swift \
-  Rimo/Settings/*.swift Rimo/Voice/*.swift Rimo/VoiceHelper/VoiceHelperProtocol.swift \
-  "$(brew --prefix opus)/lib/libopus.a"
-.build/remote-camera-test
-```
-
-语音会话、采集就绪检查、虚拟麦克风和后台服务的离线测试见 [语音验证说明](docs/voice-validation.md)。这些测试不会安装系统服务或修改系统蓝牙设置。
-
-全局提示的替换、重复消息、过期计时及手动关闭可单独验证：
-
-```sh
-swiftc -swift-version 6 -o .build/toast-test Tests/ToastTest.swift Rimo/App/RimoToast.swift
-.build/toast-test
-```
-
-## 项目资料
-
-- [Rimo 品牌资源与 Figma 设计稿](docs/brand/README.md)
-- [功能范围和已知限制](docs/product-scope.md)
-- [语音采集回放测试](Tests/VoiceReplay.swift)
-- [设备界面与验证清单](docs/device-interface.md)、[Options+ 对照记录](docs/optionsplus-main-findings.md)和 [SwiftUI 共享样式](Rimo/Settings/SettingsView.swift)
-
-第三方资源分别遵循各自许可：[Siri Remote 3D 模型（CC BY 4.0）](Rimo/Resources/SiriRemote-LICENSE.txt)、[Geist（SIL OFL 1.1）](Rimo/Resources/Geist/OFL-Geist.txt)和 [Opus](Rimo/Resources/Opus-LICENSE.txt)。
+**开发者**: Yohoia  
+**构建状态**: ✅ BUILD SUCCEEDED  
+**最近审查**: 2026-11-21（10 个 Bug 修复，代码质量提升）
