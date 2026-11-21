@@ -115,7 +115,7 @@ swiftc -swift-version 6 -o .build/toast-test Tests/ToastTest.swift Rimo/App/Rimo
 
 - [Rimo 品牌资源与 Figma 设计稿](docs/brand/README.md)
 - [功能范围和已知限制](docs/product-scope.md)
-- [A2540 收音诊断工具](Rimo/Input/VoicePrototype/README.md) 与 [回放测试](Tests/VoiceReplay.swift)
+- [语音采集回放测试](Tests/VoiceReplay.swift)
 - [设备界面与验证清单](docs/device-interface.md)、[Options+ 对照记录](docs/optionsplus-main-findings.md)和 [SwiftUI 共享样式](Rimo/Settings/SettingsView.swift)
 
 第三方资源分别遵循各自许可：[Siri Remote 3D 模型（CC BY 4.0）](Rimo/Resources/SiriRemote-LICENSE.txt)、[Geist（SIL OFL 1.1）](Rimo/Resources/Geist/OFL-Geist.txt)和 [Opus](Rimo/Resources/Opus-LICENSE.txt)。

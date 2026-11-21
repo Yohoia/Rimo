@@ -1,6 +1,7 @@
-import Foundation
-import Security
 import Darwin
+import Foundation
+import os
+import Security
 
 struct HelperError: LocalizedError {
     let errorDescription: String?
@@ -239,6 +240,8 @@ private final class StopReply: @unchecked Sendable {
 #if !HELPER_TESTING
 @main
 struct VoiceHelperMain {
+    private static let log = Logger(subsystem: "cn.yohoia.rimo.voice", category: "service")
+
     static func main() {
         do {
             guard geteuid() == 0 else { throw HelperError("语音服务必须由系统启动。") }
@@ -250,7 +253,7 @@ struct VoiceHelperMain {
             listener.resume()
             withExtendedLifetime(server) { RunLoop.current.run() }
         } catch {
-            NSLog("Rimo voice service startup failed: %@", error.localizedDescription)
+            log.error("Voice service startup failed: \(error.localizedDescription, privacy: .public)")
             FileHandle.standardError.write(Data(error.localizedDescription.utf8))
             exit(1)
         }
