@@ -48,6 +48,26 @@ int main(void) {
     cycle.mInputTime.mSampleTime = first + CAPACITY;
     assert(io(driver, DEVICE, STREAM, 1, kAudioServerPlugInIOOperationReadInput, 960, &cycle, output, NULL) == noErr);
     for (int i = 0; i < 960; ++i) assert(output[i] == 0);
+    // A new segment can append behind a queued tail without resetting it.
+    uint64_t tail = writeCursor;
+    data = CFDataCreate(NULL, (UInt8 *)input, sizeof(input));
+    assert(set(driver, DEVICE, 0, &pcm, 0, NULL, sizeof(data), &data) == noErr);
+    CFRelease(data);
+    assert(writeCursor == tail + 960);
+    AudioObjectPropertyAddress status = {STATUS, kAudioObjectPropertyScopeGlobal, 0};
+    CFDataRef report = NULL;
+    UInt32 actual = 0;
+    assert(get(driver, DEVICE, 0, &status, 0, NULL, sizeof(report), &actual, &report) == noErr);
+    assert(CFDataGetLength(report) == 8 * sizeof(uint64_t));
+    uint64_t counters[8]; memcpy(counters, CFDataGetBytePtr(report), sizeof(counters)); CFRelease(report);
+    assert(counters[0] == 1 && counters[2] == 2 && counters[3] > 0 && counters[4] == 1920);
+    // An overloaded producer gets an error instead of overwriting queued audio.
+    uint64_t savedCursor = writeCursor;
+    writeCursor = currentFrame() + (uint64_t)RATE * 2;
+    data = CFDataCreate(NULL, (UInt8 *)input, sizeof(input));
+    assert(set(driver, DEVICE, 0, &pcm, 0, NULL, sizeof(data), &data) == kAudioHardwareIllegalOperationError);
+    CFRelease(data);
+    writeCursor = savedCursor;
     // Reset prevents a previous session's pending audio being replayed.
     clear = CFDataCreate(NULL, NULL, 0);
     assert(set(driver, DEVICE, 0, &pcm, 0, NULL, sizeof(clear), &clear) == noErr);

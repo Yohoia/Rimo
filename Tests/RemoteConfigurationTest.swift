@@ -37,7 +37,49 @@ struct RemoteConfigurationTest {
         try verifyScrollMode()
         try verifyOtherActions()
         verifyRemotePresses()
-        print("Scenes, mapping persistence, scroll mode, HID de-duplication and trigger recognition passed.")
+        try verifySiriVoiceKey()
+        print("Scenes, mapping persistence, scroll mode, Siri voice key, HID de-duplication and trigger recognition passed.")
+    }
+
+    static func verifySiriVoiceKey() throws {
+        func key(_ code: Int, _ flags: NSEvent.ModifierFlags = []) -> RemoteAction {
+            let option = KeyboardShortcut.navigationKeys.first { $0.id == UInt16(code) }
+                ?? KeyboardShortcut.Option(id: UInt16(code), title: "K")
+            return .keyboard(KeyboardShortcut(option: option, flags: flags))
+        }
+        // The Siri key is an ordinary key: default Open Siri, any action allowed.
+        precondition(ScenePreset.defaultBindings.first { $0.button == .siri }?.action == .system(.activateSiri))
+        precondition(RemoteAction.media(.mute).isAssignable(to: .siri))
+
+        // Only a lone modifier — an input method's voice key — routes audio.
+        for code in [kVK_Function, kVK_Option, kVK_RightOption, kVK_Command, kVK_RightCommand,
+                     kVK_Control, kVK_RightControl, kVK_Shift, kVK_RightShift] {
+            precondition(key(code).startsVoiceInput, "\(code) is a voice key")
+        }
+        var held = KeyboardShortcut(option: KeyboardShortcut.navigationKeys.first { $0.id == UInt16(kVK_Function) }!, flags: [])
+        held.holdsUntilRelease = true
+        precondition(RemoteAction.keyboard(held).startsVoiceInput)
+        precondition(!key(kVK_Return).startsVoiceInput)
+        precondition(!key(kVK_ANSI_A, .command).startsVoiceInput)
+        precondition(!key(kVK_Option, .shift).startsVoiceInput)
+        precondition(!RemoteAction.system(.activateSiri).startsVoiceInput)
+
+        // Scenes and presets can change the Siri key like any other.
+        var config = RemoteConfiguration()
+        config.global[.siri] = .system(.activateSiri)
+        var scene = ButtonMappings()
+        scene[.siri] = key(kVK_Function)
+        config.scenes = [AppSceneMapping(id: "sample.app", name: "App", buttons: scene)]
+        config.automatic = true
+        precondition(config.action(for: .siri, in: "sample.app") == key(kVK_Function))
+        precondition(config.action(for: .siri, in: "other.app") == .system(.activateSiri))
+        config.apply(.presentation, to: "preset.app", name: "Preset")
+        precondition(config.action(for: .siri, in: "preset.app") == .system(.activateSiri))
+
+        // Unknown actions from development builds are dropped, not fatal.
+        let stored = Data(#"{"actions":{"siri":{"voice":{"_0":{"mode":"toggle"}}},"mute":{"media":{"_0":"mute"}}}}"#.utf8)
+        let decoded = try JSONDecoder().decode(ButtonMappings.self, from: stored)
+        precondition(decoded[.siri] == nil && decoded[.mute] == .media(.mute))
     }
 
     static func verifyScrollMode() throws {

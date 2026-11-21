@@ -104,7 +104,7 @@ struct MappingView: View {
             }
         })
         return ZStack(alignment: .topLeading) {
-            if model.isRemoteConnected {
+            if presentationActive && model.isRemoteConnected {
                 RemoteAmbientGlow(breathing: breathing)
                     .frame(width: min(stage.size.width * 0.66, 580), height: min(stage.size.height, 535))
                     .position(x: stage.remoteX, y: stage.glowY)
@@ -126,7 +126,7 @@ struct MappingView: View {
                 .allowsHitTesting(model.isRemoteConnected)
                 .accessibilityValue(model.isRemoteConnected ? "已连接" : "未连接，遥控器已禁用")
                 .overlay {
-                    if stage.nameOpacity > 0 {
+                    if presentationActive && stage.nameOpacity > 0 {
                         Text(A2540Input.modelName)
                             .font(RimoStyle.modelHeading)
                             .tracking(1)
@@ -244,7 +244,7 @@ private struct ButtonStage {
     let progress: Double
 
     var stageWidth: CGFloat { size.width - ActionSidebarLayout.width(in: size.width) }
-    var remoteX: CGFloat { interpolate(size.width * 0.53, stageWidth * 0.55) }
+    var remoteX: CGFloat { interpolate(size.width / 2, stageWidth * 0.55) }
     var projection: RemoteProjection {
         let viewportWidth = max(1, min(535, stageWidth - 25))
         let restingUnit = max(0.1, RemotePresentation.height(in: size.height) / 14)
@@ -336,7 +336,9 @@ struct ButtonMappingEditor: View {
         if case .shortcut(let shortcut) = action { return shortcut }
         return nil
     }
-    private var reserved: Bool { button == .siri && model.voice.enabled }
+    /// The Siri key is the remote's microphone key: mapping it to an input
+    /// method's voice key (Fn, Option…) also sends the remote's audio.
+    private var voiceKey: Bool { button == .siri }
 
     private var scene: AppSceneMapping? { sceneID.flatMap(model.scene) }
 
@@ -350,7 +352,6 @@ struct ButtonMappingEditor: View {
         .onChange(of: trigger) { _ in loadTextDraft() }
         .onChange(of: action) { _ in if kind.wrappedValue != .text { loadTextDraft() } }
         .onDisappear(perform: stopCapture)
-        .onChange(of: reserved) { if $0 { closeActionConfiguration() } }
         .background {
             if capturing {
                 ShortcutCapture { shortcut in
@@ -371,60 +372,73 @@ struct ButtonMappingEditor: View {
                     .font(.system(size: 20, weight: .medium))
                     .accessibilityAddTraits(.isHeader)
                 Spacer()
-                if !reserved { sidebarTriggerMenu }
             }
             .padding(.horizontal, 32)
             .frame(height: 70)
             .background(RimoStyle.actionSidebarHeader)
 
-            if reserved {
-                Text("停止遥控器收音后，即可编辑 Siri 侧键。")
-                    .foregroundStyle(RimoStyle.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(32)
-            } else {
-                actionBrowser
+            triggerTabs
+            sidebarDivider
+            if voiceKey, action?.startsVoiceInput == true {
+                VoiceKeyStatus(voice: model.voice, helper: model.voice.helper)
+                sidebarDivider
             }
+            actionBrowser
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(RimoStyle.surface)
     }
 
-    private var sidebarTriggerMenu: some View {
-        Menu {
+    /// Single, double and long press as tabs showing each trigger's action.
+    private var triggerTabs: some View {
+        HStack(spacing: 6) {
             ForEach(RemoteTrigger.allCases) { item in
-                Button {
-                    changeTrigger(to: item)
-                } label: {
-                    if trigger == item { Label(item.title, systemImage: "checkmark") }
-                    else { Text(item.title) }
+                let selected = trigger == item
+                let current = mappings.isEnabled(button, trigger: item) ? mappings[button, item] : nil
+                Button { changeTrigger(to: item) } label: {
+                    VStack(spacing: 3) {
+                        Text(item.title)
+                            .font(.system(size: 13, weight: .semibold))
+                        Text(triggerSummary(item, current))
+                            .font(.system(size: 11))
+                            .lineLimit(1)
+                            .opacity(0.8)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .foregroundStyle(selected ? RimoStyle.actionLabel : RimoStyle.ink)
+                    .background(selected ? RimoStyle.action : RimoStyle.canvas, in: RimoStyle.controlShape)
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selected ? .isSelected : [])
+                .accessibilityLabel("\(item.title)，\(triggerSummary(item, current))")
             }
-        } label: {
-            Text(trigger.title)
-                .font(.system(size: 13, weight: .medium))
         }
-        .menuStyle(.borderlessButton)
-        .tint(RimoStyle.secondaryText)
-        .fixedSize()
-        .accessibilityLabel("触发方式")
-        .accessibilityValue(trigger.title)
-        .help("选择此按键的触发方式")
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
+
+    private func triggerSummary(_ item: RemoteTrigger, _ action: RemoteAction?) -> String {
+        // "Hold until release" on single press starts at once, so the other triggers are unused.
+        if item != .single, let single = mappings[button], mappings.isEnabled(button), single.holdsUntilRelease {
+            return "由单击接管"
+        }
+        guard let action else { return "未设置" }
+        if case .keyboard(let key) = action { return key.title + (key.holdsUntilRelease == true ? " 按住" : "") }
+        return action.title
     }
 
     private var sceneEditor: some View {
         VStack(alignment: .leading, spacing: 16) {
             editorHeader
             RimoDivider()
-            if reserved {
-                Text("停止遥控器收音后，即可编辑 Siri 侧键。")
-                    .foregroundStyle(RimoStyle.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else {
-                triggerPicker
-                configurationFields
-                sceneActionStatus
+            triggerPicker
+            if voiceKey, action?.startsVoiceInput == true {
+                VoiceKeyStatus(voice: model.voice, helper: model.voice.helper)
             }
+            configurationFields
+            sceneActionStatus
         }
         .padding(RimoStyle.cardPadding)
         .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -443,7 +457,7 @@ struct ButtonMappingEditor: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(button.title).font(.system(size: 19, weight: .semibold))
                     .accessibilityAddTraits(.isHeader)
-                Text(reserved ? "用于遥控器收音" : actionSummary)
+                Text(actionSummary)
                     .font(RimoStyle.label)
                     .foregroundStyle(RimoStyle.muted)
                     .lineLimit(1)
@@ -484,6 +498,14 @@ struct ButtonMappingEditor: View {
                 || groupChoices(group).contains { $0.matches(query) }))
         }
         return VStack(alignment: .leading, spacing: 0) {
+            if trigger != .single, let single = mappings[button], mappings.isEnabled(button), single.holdsUntilRelease {
+                Text("单击当前是「\(single.title) · 按住至松开」，按下时立即开始并保持到松开，所以不会再识别双击和长按。要使用它们，请把单击改成“触发一次”。")
+                    .font(RimoStyle.label)
+                    .foregroundStyle(RimoStyle.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 32)
+                    .padding(.top, 14)
+            }
             actionSearchField
             sidebarDivider
             ScrollViewReader { proxy in
@@ -724,7 +746,10 @@ struct ButtonMappingEditor: View {
             case .right: [.key(UInt16(kVK_RightArrow)), .system(.nextDesktop), .media(.nextTrack)]
             case .back, .menu: [.key(UInt16(kVK_Escape)), .system(.showDesktop)]
             case .power: [.system(.sleepDisplay), .system(.lockScreen)]
-            case .siri: [.system(.activateSiri), .configure(.keyboard), .configure(.shortcut), .system(.toggleScrollMode)]
+            // Siri: open Siri, or press an input method's voice key (Voxa's
+            // Typeless = Fn, Doubao/WeChat = Option), which also sends the audio.
+            case .siri: [.system(.activateSiri), .key(UInt16(kVK_Function)), .key(UInt16(kVK_RightOption)),
+                         .key(UInt16(kVK_Option)), .configure(.keyboard)]
             }
             var result = suggested
             if !result.contains(.configure(.keyboard)) { result.append(.configure(.keyboard)) }
@@ -1070,6 +1095,7 @@ struct ButtonMappingEditor: View {
                 hint("触发后用四个方向键滚动。以相同方式再次触发即可恢复原映射，也可从菜单栏关闭。")
             } else if action == .system(.activateSiri) {
                 hint("请先在 macOS 系统设置中启用 Siri。")
+
             } else if !inSidebar || action != nil {
                 hint(SystemAction.otherActions.contains { action == .system($0) }
                      ? "使用 macOS 常用快捷键，前台 App 需要支持对应操作。"

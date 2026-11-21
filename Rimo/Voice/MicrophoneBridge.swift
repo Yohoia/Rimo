@@ -1,108 +1,83 @@
-import AppKit
-import Combine
+import Foundation
 import CoreAudio
 
-@MainActor
-final class MicrophoneBridge: ObservableObject {
-    @Published private(set) var available = false
-    @Published private(set) var installed = false
-    @Published private(set) var installing = false
-    @Published private(set) var message: String?
-    private var device = AudioObjectID(kAudioObjectUnknown)
-    private var task: Process?
-    private var errors: Pipe?
-    private var timer: Timer?
-    private let pcmSelector: AudioObjectPropertySelector = 0x7370636d // 'spcm'
-    private let driverPath = "/Library/Audio/Plug-Ins/HAL/RimoMicrophone.driver"
-
-    init() {
-        refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refresh() }
-        }
+// Each instance is confined to its owning queue. Audio publishing uses an
+// independent instance from the UI's periodic device diagnostics.
+final class MicrophoneOutput {
+    struct Status: Sendable {
+        let clients: UInt64
+        let writes: UInt64
+        let reads: UInt64
+        let writtenFrames: UInt64
+        let readFrames: UInt64
+        let pendingFrames: UInt64
+        let silentFrames: UInt64
     }
 
+    private var device = AudioObjectID(kAudioObjectUnknown)
+    private(set) var available = false
+
     func refresh() {
-        installed = FileManager.default.fileExists(atPath: driverPath)
         var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyTranslateUIDToDevice,
             mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
         var uid: CFString = "cn.yohoia.rimo.microphone" as CFString
-        var output = AudioObjectID(kAudioObjectUnknown)
+        var found = AudioObjectID(kAudioObjectUnknown)
         var size = UInt32(MemoryLayout<AudioObjectID>.size)
-        let result = withUnsafePointer(to: &uid) { pointer in
+        let result = withUnsafePointer(to: &uid) {
             AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address,
-                UInt32(MemoryLayout<CFString>.size), pointer, &size, &output)
+                UInt32(MemoryLayout<CFString>.size), $0, &size, &found)
         }
-        if result == noErr && output != kAudioObjectUnknown {
-            var custom = property()
-            device = output
-            available = AudioObjectHasProperty(output, &custom)
-        } else { device = AudioObjectID(kAudioObjectUnknown); available = false }
+        var pcm = property(0x7370636d)
+        device = found
+        available = result == noErr && found != kAudioObjectUnknown && AudioObjectHasProperty(found, &pcm)
     }
 
-    func reset() { send(Data()) }
+    @discardableResult
+    func reset() -> OSStatus { send(Data()) }
 
-    func push(_ pcm: [Int16]) {
-        guard available, !pcm.isEmpty else { return }
-        // The custom HAL property marshals CFData using CoreAudio's built-in IPC.
+    func push(_ pcm: [Int16]) -> OSStatus {
         let floats = pcm.map { Float($0) / 32768 }
-        send(floats.withUnsafeBytes { Data($0) })
+        return send(floats.withUnsafeBytes { Data($0) })
     }
 
-    private func send(_ data: Data) {
-        guard available else { return }
-        var address = property()
-        var reference = data as CFData
-        let result = AudioObjectSetPropertyData(device, &address, 0, nil,
-            UInt32(MemoryLayout<CFData>.size), &reference)
+    func status() -> Status? {
+        guard available else { return nil }
+        var address = property(0x73737461) // 'ssta'
+        guard AudioObjectHasProperty(device, &address) else { return nil }
+        var reference: Unmanaged<CFData>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFData>?>.size)
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &reference) == noErr,
+              let reference else { return nil }
+        let bytes = reference.takeRetainedValue() as Data
+        guard bytes.count == 64 else { return nil }
+        let values = bytes.withUnsafeBytes { raw in
+            (0..<8).map { raw.loadUnaligned(fromByteOffset: $0 * 8, as: UInt64.self) }
+        }
+        guard values[0] == 1 else { return nil }
+        return Status(clients: values[1], writes: values[2], reads: values[3], writtenFrames: values[4],
+                      readFrames: values[5], pendingFrames: values[6], silentFrames: values[7])
+    }
+
+    private func send(_ data: Data) -> OSStatus {
+        if !available { refresh() }
+        guard available else { return kAudioHardwareBadDeviceError }
+        var address = property(0x7370636d)
+        let referenceData = data as CFData
+        var reference = Unmanaged.passUnretained(referenceData)
+        let result = withExtendedLifetime(referenceData) {
+            AudioObjectSetPropertyData(device, &address, 0, nil,
+                UInt32(MemoryLayout<Unmanaged<CFData>>.size), &reference)
+        }
         if result != noErr {
-            message = "麦克风音频传输失败（\(result)），请停止后重新启用收音。"
+            // Rebind for the next block after coreaudiod or the device restarts.
+            // Retrying this block could duplicate a successful partial delivery.
             available = false
         }
+        return result
     }
 
-    func install() {
-        guard !installed, !installing, let resources = Bundle.main.resourceURL else { return }
-        let source = resources.appendingPathComponent("RimoMicrophone.driver")
-        guard FileManager.default.fileExists(atPath: source.path) else {
-            message = "缺少麦克风驱动，请重新构建 Rimo。"
-            return
-        }
-        let command = ["/bin/bash", resources.appendingPathComponent("install-microphone.sh").path, source.path]
-            .map { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }.joined(separator: " ")
-        let escaped = command.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
-        let process = Process()
-        let pipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", "do shell script \"\(escaped)\" with administrator privileges with prompt \"Rimo 将安装系统麦克风，让其他应用使用遥控器的声音。\""]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = pipe
-        process.terminationHandler = { [weak self] process in
-            let code = process.terminationStatus
-            Task { @MainActor in self?.installationEnded(code: code) }
-        }
-        task = process; errors = pipe; installing = true; message = nil
-        do { try process.run() }
-        catch { task = nil; errors = nil; installing = false; message = error.localizedDescription }
-    }
-
-    private func installationEnded(code: Int32) {
-        let error = errors.flatMap { String(data: $0.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) } ?? ""
-        task = nil; errors = nil; installing = false
-        refresh()
-        if code == 0 {
-            message = available ? "系统麦克风已就绪。请在使用声音的 App 中选择 Rimo Remote Microphone。" : "驱动已安装。请重新启动 Mac，让系统加载麦克风。"
-        } else if error.contains("-128") { message = "已取消安装。遥控器录音仍可正常使用。" }
-        else { message = "安装失败：" + String(error.trimmingCharacters(in: .whitespacesAndNewlines).prefix(400)) }
-    }
-
-    func shutdown() {
-        reset()
-        timer?.invalidate(); timer = nil
-    }
-
-    private func property() -> AudioObjectPropertyAddress {
-        AudioObjectPropertyAddress(mSelector: pcmSelector, mScope: kAudioObjectPropertyScopeGlobal,
+    private func property(_ selector: AudioObjectPropertySelector) -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
                                    mElement: kAudioObjectPropertyElementMain)
     }
 }

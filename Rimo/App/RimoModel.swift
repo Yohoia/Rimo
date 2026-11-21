@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import CoreBluetooth
 import IOKit.hid
+import os
 
 @MainActor
 final class RimoModel: ObservableObject {
@@ -48,6 +49,7 @@ final class RimoModel: ObservableObject {
     private var pendingPresses: [RemoteButton: PendingPress] = [:]
 
     private var heldOutputs: [RemoteButton: KeyboardShortcut] = [:]
+    private var pendingReleases: [RemoteButton: (key: KeyboardShortcut, task: Task<Void, Never>)] = [:]
 
     private struct PendingPress {
         let appPID: pid_t?
@@ -115,6 +117,7 @@ final class RimoModel: ObservableObject {
         var completed = configuration
         completed.completeSceneMappings()
         if completed != configuration { _ = updateConfiguration { $0 = completed } }
+        syncVoice()
         refresh()
         connectionTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshConnection() }
@@ -336,6 +339,7 @@ final class RimoModel: ObservableObject {
             cancelPendingPresses()
             configuration = next
             configurationError = nil
+            syncVoice()
             return true
         } catch {
             configurationError = "未能保存映射。"
@@ -395,17 +399,31 @@ final class RimoModel: ObservableObject {
 
     private func handle(_ button: RemoteButton, edge: RemoteButtonEdge) {
         if edge == .released, let key = heldOutputs.removeValue(forKey: button) {
-            _ = key.post(pressed: false)
+            release(key, for: button)
         }
         if edge == .pressed {
             lastButton = button
             observedButtons.insert(button)
+            // A new press ends any voice key still waiting for the audio tail.
+            if let pending = pendingReleases.removeValue(forKey: button) {
+                pending.task.cancel()
+                _ = pending.key.post(pressed: false)
+            }
+            if button == .siri {
+                // The remote only sends audio while Siri is held. Route it to
+                // Rimo Remote Microphone only when this app's Siri mapping
+                // presses an input method's voice key.
+                voice.siriPressed(routingAudio: siriStartsVoiceInput(in: NSWorkspace.shared.frontmostApplication?.bundleIdentifier))
+            }
         }
 
         let app = NSWorkspace.shared.frontmostApplication
         var press = pendingPresses.removeValue(forKey: button)
         press?.timer?.cancel()
-        guard canDispatch(button) else { return }
+        guard canDispatch() else {
+            Self.log.info("\(button.rawValue, privacy: .public) ignored: paused=\(self.paused) recording=\(self.recording != nil)")
+            return
+        }
         if let scroll = scrollMode.scroll(for: button) {
             if edge == .pressed { dispatch(.scroll(scroll)) }
             return
@@ -456,7 +474,7 @@ final class RimoModel: ObservableObject {
     }
 
     private func finishDeadline(for button: RemoteButton) {
-        guard var press = pendingPresses.removeValue(forKey: button), canDispatch(button),
+        guard var press = pendingPresses.removeValue(forKey: button), canDispatch(),
               press.appPID == NSWorkspace.shared.frontmostApplication?.processIdentifier else { return }
         if let trigger = press.sequence.advance(to: ProcessInfo.processInfo.systemUptime),
            let action = press.actions[trigger] {
@@ -466,8 +484,40 @@ final class RimoModel: ObservableObject {
         track(press, for: button)
     }
 
-    private func canDispatch(_ button: RemoteButton) -> Bool {
-        !paused && recording == nil && !isSettingsFocused() && !(button == .siri && voice.enabled)
+    private static let log = Logger(subsystem: "cn.yohoia.rimo", category: "mapping")
+
+    private func canDispatch() -> Bool {
+        !paused && recording == nil
+    }
+
+    /// A held voice key on Siri releases 0.3 s late so the last words reach
+    /// the microphone before the input method stops listening.
+    private func release(_ key: KeyboardShortcut, for button: RemoteButton) {
+        guard button == .siri, RemoteAction.keyboard(key).startsVoiceInput else {
+            _ = key.post(pressed: false)
+            return
+        }
+        let task = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled, let self,
+                  let pending = self.pendingReleases.removeValue(forKey: button) else { return }
+            _ = pending.key.post(pressed: false)
+        }
+        pendingReleases[button] = (key, task)
+    }
+
+    /// Any trigger of the effective Siri mapping presses a voice key.
+    private func siriStartsVoiceInput(in appID: String?) -> Bool {
+        RemoteTrigger.allCases.contains { configuration.action(for: .siri, trigger: $0, in: appID)?.startsVoiceInput == true }
+    }
+
+    /// The remote's audio capture runs only while some Siri mapping (global or
+    /// an enabled scene) presses a voice key.
+    private func syncVoice() {
+        let mappings = [configuration.global] + configuration.scenes.filter(\.enabled).map { $0.resolved(global: configuration.global) }
+        voice.setWanted(mappings.contains { buttons in
+            RemoteTrigger.allCases.contains { buttons.isEnabled(.siri, trigger: $0) && buttons[.siri, $0]?.startsVoiceInput == true }
+        })
     }
 
     private func cancelPendingPresses() {
@@ -475,9 +525,12 @@ final class RimoModel: ObservableObject {
         pendingPresses.removeAll()
         for key in heldOutputs.values { _ = key.post(pressed: false) }
         heldOutputs.removeAll()
+        for pending in pendingReleases.values { pending.task.cancel(); _ = pending.key.post(pressed: false) }
+        pendingReleases.removeAll()
     }
 
     private func dispatch(_ action: RemoteAction, heldBy button: RemoteButton? = nil) {
+        Self.log.info("dispatch \(action.title, privacy: .public)")
         actionError = nil
         if action == .system(.toggleScrollMode) {
             toggleScrollMode()
@@ -489,11 +542,14 @@ final class RimoModel: ObservableObject {
         }
         if let button, case .keyboard(let key) = action, key.holdsUntilRelease == true {
             if key.post(pressed: true) { heldOutputs[button] = key }
-            else { actionError = "无法发送按键，请检查辅助功能权限。" }
+            else { actionError = "无法发送按键，请检查辅助功能权限。"; canPost = CGPreflightPostEventAccess() }
             return
         }
         do { try ActionOutput.perform(action) }
-        catch { actionError = error.localizedDescription; canPost = CGPreflightPostEventAccess() }
+        catch {
+            Self.log.error("action failed: \(error.localizedDescription, privacy: .public)")
+            actionError = error.localizedDescription; canPost = CGPreflightPostEventAccess()
+        }
     }
 }
 

@@ -12,4 +12,4 @@
 
 本地完整导出包位于 `icon-exports/Rimo-logo-export.zip`，包含 SVG 母版、透明 PNG、菜单栏模板和 `Rimo.icns`。SVG 与 PNG 均已移除 Figma 导出的页面底色；Dock 保留 100 px 透明留边。
 
-品牌统一写作 **Rimo**；Xcode 工程、scheme 和应用产物名称均为 Rimo，Bundle ID 为 `cn.yohoia.rimo`。首次启动时会读取旧 Bundle ID 的映射配置，已有 Rimo 配置优先。旧版录音仍保留在原来的 Application Support 目录，新录音写入 `~/Library/Application Support/Rimo/Recordings/`。虚拟麦克风的新名称为 `Rimo Remote Microphone`；如之前装过旧驱动，需要单独安装新版驱动。
+品牌统一写作 **Rimo**；Xcode 工程、scheme 和应用产物名称均为 Rimo，Bundle ID 为 `cn.yohoia.rimo`。首次启动时会读取旧 Bundle ID 的映射配置，已有 Rimo 配置优先。旧版录音仍保留在原来的 Application Support 目录；当前版本不再保存录音。虚拟麦克风的新名称为 `Rimo Remote Microphone`；启用遥控器语音时会自动安装新版驱动。

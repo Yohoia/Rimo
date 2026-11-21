@@ -8,15 +8,32 @@ target="$target_dir/RimoMicrophone.driver"
 /usr/bin/codesign --verify --strict "$source_driver"
 [[ $(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$source_driver/Contents/Info.plist") == cn.yohoia.rimo.audio ]] || exit 65
 if [[ -e "$target" ]]; then
-    echo 'Rimo 麦克风驱动已存在；请先检查现有版本。' >&2
-    exit 66
+    [[ $(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$target/Contents/Info.plist") == cn.yohoia.rimo.audio ]] || exit 66
 fi
 /bin/mkdir -p "$target_dir"
+lock="$target_dir/.Rimo-install.lock"
+if ! /bin/mkdir "$lock" 2>/dev/null; then
+    echo '已有麦克风安装正在运行，请稍后重试。' >&2
+    exit 68
+fi
+trap '/bin/rmdir "$lock"' EXIT
 staging=$(/usr/bin/mktemp -d "$target_dir/.Rimo-install.XXXXXXXX")
-trap '/bin/rm -rf "$staging"' EXIT
+cleanup() {
+    if [[ ! -e "$target" && -e "$staging/previous.driver" ]]; then
+        /bin/mv "$staging/previous.driver" "$target"
+    fi
+    /bin/rm -rf "$staging"
+    /bin/rmdir "$lock"
+}
+trap cleanup EXIT
 /usr/bin/ditto --norsrc --noextattr --qtn "$source_driver" "$staging/RimoMicrophone.driver"
 /usr/sbin/chown -R root:wheel "$staging/RimoMicrophone.driver"
 /bin/chmod -R go-w "$staging/RimoMicrophone.driver"
 /usr/bin/codesign --verify --strict "$staging/RimoMicrophone.driver"
-/bin/mv "$staging/RimoMicrophone.driver" "$target"
+# Keep the previous bundle until the replacement is in place.
+if [[ -e "$target" ]]; then /bin/mv "$target" "$staging/previous.driver"; fi
+if ! /bin/mv "$staging/RimoMicrophone.driver" "$target"; then
+    if [[ -e "$staging/previous.driver" ]]; then /bin/mv "$staging/previous.driver" "$target"; fi
+    exit 67
+fi
 # Preserve active calls/recordings: do not restart coreaudiod automatically.

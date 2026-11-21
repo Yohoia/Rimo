@@ -26,14 +26,16 @@ private struct RimoMenu: View {
 
     var body: some View {
         Text(model.statusTitle)
+        if model.voice.installed && model.voice.wanted {
+            // Voxa's menu bar shows the voice chain and offers a repair.
+            Text("语音：\(model.voice.state.title)")
+            if case .failed = model.voice.state {
+                Button("修复语音…") { model.voice.repair() }
+            }
+        }
         Button("打开按键设置…", action: openSettings)
         Toggle("滚动模式", isOn: Binding(get: { model.scrollMode.enabled }, set: { _ in model.toggleScrollMode() }))
         Button(model.paused ? "恢复映射" : "暂停映射") { model.togglePaused() }
-        Divider()
-        Text(model.voice.state.title)
-        Button(model.voice.enabled ? "停止遥控器收音" : "启用遥控器收音…") {
-            if model.voice.enabled { model.voice.stop() } else { model.voice.start() }
-        }
         Divider()
         Button("退出 Rimo") { NSApp.terminate(nil) }
             .keyboardShortcut("q")

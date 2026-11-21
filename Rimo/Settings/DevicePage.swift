@@ -1,8 +1,9 @@
+import AppKit
 import SwiftUI
 
 enum DeviceSettingsStyle {
     static let heading = Font.system(size: 14, weight: .bold)
-    static let title = Font.system(size: 16)
+    static let title = Font.system(size: 16, weight: .bold)
     static let body = Font.system(size: 14)
     static let text = Color(nsColor: NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
@@ -28,6 +29,64 @@ struct DeviceSettingsLinkStyle: ButtonStyle {
     }
 }
 
+enum SettingsAppearance {
+    static let title = Font.system(size: 15, weight: .semibold)
+    static let body = Font.system(size: 14)
+    static let secondary = Color(nsColor: .secondaryLabelColor)
+    static let outline = Color(nsColor: .separatorColor)
+    static let accent = Color(red: 0.13, green: 0.35, blue: 0.98)
+}
+
+
+struct SettingsRow<Control: View>: View {
+    let title: String
+    let description: String
+    @ViewBuilder let control: () -> Control
+
+    init(_ title: String, description: String, @ViewBuilder control: @escaping () -> Control) {
+        self.title = title
+        self.description = description
+        self.control = control
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 24) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(title)
+                    .font(SettingsAppearance.title)
+                Text(description)
+                    .font(SettingsAppearance.body)
+                    .foregroundStyle(SettingsAppearance.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            control()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct SettingsControl: View {
+    let title: String
+    var symbol = "chevron.down"
+
+    var body: some View {
+        HStack(spacing: 18) {
+            Text(title)
+                .lineLimit(1)
+            Image(systemName: symbol)
+                .font(.system(size: 11, weight: .semibold))
+                .accessibilityHidden(true)
+        }
+        .font(SettingsAppearance.body)
+        .foregroundStyle(.primary)
+        .padding(.horizontal, 13)
+        .frame(minWidth: 116, minHeight: 38)
+        .background(RoundedRectangle(cornerRadius: 9).strokeBorder(SettingsAppearance.outline, lineWidth: 1))
+        .contentShape(RoundedRectangle(cornerRadius: 9))
+    }
+}
+
 struct DevicePage: View {
     @ObservedObject var model: RimoModel
     let openPermissionGuide: () -> Void
@@ -35,90 +94,45 @@ struct DevicePage: View {
     var body: some View {
         GeometryReader { geometry in
             ScrollView {
-                VStack(alignment: .leading, spacing: 30) {
-                    settingsSection("关于", contentSpacing: 16) {
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack(spacing: 12) {
-                                Text("Apple TV Siri Remote")
-                                    .font(DeviceSettingsStyle.title)
-                                Spacer(minLength: 16)
-                                HStack(spacing: 7) {
-                                    Circle()
-                                        .fill(model.isRemoteConnected ? RimoStyle.success : RimoStyle.muted)
-                                        .frame(width: 7, height: 7)
-                                        .accessibilityHidden(true)
-                                    Text(model.isRemoteConnected ? "已连接" : "未连接")
-                                        .fixedSize()
-                                }
-                            }
-                            VStack(alignment: .leading, spacing: 12) {
-                                deviceInformationRow("型号", value: A2540Input.modelName)
-                                deviceInformationRow("制造商", value: model.deviceInformation?.manufacturer)
-                                deviceInformationRow("设备编号", value: deviceIdentifier)
-                                deviceInformationRow("蓝牙地址", value: model.remoteAddress?.uppercased())
-                            }
-                            .padding(.top, 8)
+                VStack(alignment: .leading, spacing: 44) {
+                    VStack(alignment: .leading, spacing: 24) {
+                        Text("关于")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(SettingsAppearance.secondary)
+                            .accessibilityAddTraits(.isHeader)
+                            .padding(.bottom, 4)
+
+                        VStack(spacing: 18) {
+                            informationRow("型号", value: A2540Input.modelName)
+                            informationRow("制造商", value: model.deviceInformation?.manufacturer)
+                            informationRow("设备编号", value: deviceIdentifier)
+                            informationRow("蓝牙地址", value: model.remoteAddress?.uppercased())
                         }
                     }
 
-                    settingsSection("通用") {
-                        VStack(alignment: .leading, spacing: 30) {
-                            ForEach(RimoPermission.allCases) { permission in
-                                permissionRow(permission)
-                            }
-                            Button("重新查看设置引导", action: openPermissionGuide)
-                        }
-                    }
+                    VStack(alignment: .leading, spacing: 28) {
+                        Text("通用")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(SettingsAppearance.secondary)
+                            .accessibilityAddTraits(.isHeader)
+                            .padding(.bottom, 4)
 
-                    settingsSection("语音") {
-                        VoiceView(voice: model.voice)
-                    }
-
-                    settingsSection("其他") {
-                        VStack(alignment: .leading, spacing: 28) {
-                            DisclosureGroup("按键诊断") {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    Text(model.inputStatusTitle)
-                                    Text("当前监听模式会保留系统原按键动作。")
-                                        .foregroundStyle(DeviceSettingsStyle.text)
-                                    if let last = model.lastButton { Text("最近收到\(last.title)") }
-                                    if case .failed(let result) = model.status {
-                                        Text("HID 打开失败 \(String(format: "0x%08X", UInt32(bitPattern: result)))")
-                                    }
-                                    if let diagnostic = model.diagnostic { Text(diagnostic).font(DeviceSettingsStyle.body) }
-                                    if let report = model.buttonReport { Text(report).font(DeviceSettingsStyle.body) }
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .textSelection(.enabled)
-                                .padding(.top, 12)
-                            }
-                            if let source = URL(string: "https://sketchfab.com/3d-models/apple-tv-4k-3rdgen-wifi-siri-remote-3rdgen-44ce2c6bdf2846ccbf1157b4f0aa1fa3"),
-                               let license = URL(string: "https://creativecommons.org/licenses/by/4.0/") {
-                                VStack(alignment: .leading, spacing: 12) {
-                                    Text("3D 模型").font(DeviceSettingsStyle.title)
-                                    HStack(spacing: 6) {
-                                        Link("polyman", destination: source).foregroundStyle(DeviceSettingsStyle.action)
-                                        Text("·").foregroundStyle(DeviceSettingsStyle.text)
-                                        Link("CC BY 4.0", destination: license).foregroundStyle(DeviceSettingsStyle.action)
-                                    }
-                                }
-                            }
+                        ForEach(RimoPermission.allCases) { permission in
+                            permissionRow(permission)
                         }
                     }
                 }
-                // Options+ uses a 540-point panel in the right 70% of the window,
-                // with 6% outer margin and 40 points of content padding.
-                .frame(width: min(500, geometry.size.width - 280), alignment: .leading)
+                .frame(width: min(680, geometry.size.width * 0.7 - 72), alignment: .leading)
                 .padding(.top, 54)
-                .padding(.bottom, 48)
-                .padding(.trailing, trailingInset(in: geometry.size.width))
+                .padding(.bottom, 56)
+                .padding(.trailing, 40)
                 .frame(maxWidth: .infinity, alignment: .trailing)
             }
-            .buttonStyle(DeviceSettingsLinkStyle())
-            .font(DeviceSettingsStyle.body)
+            .buttonStyle(.plain)
+            .font(SettingsAppearance.body)
             .lineSpacing(3)
-            .foregroundStyle(DeviceSettingsStyle.text)
-            .tint(DeviceSettingsStyle.action)
+            .foregroundStyle(.primary)
+            .tint(SettingsAppearance.accent)
         }
     }
 
@@ -128,55 +142,30 @@ struct DevicePage: View {
         return String(format: "VID %04X · PID %04X", vendor, product)
     }
 
-    @ViewBuilder private func deviceInformationRow(_ title: String, value: String?) -> some View {
+    @ViewBuilder private func informationRow(_ title: String, value: String?) -> some View {
         if let value, !value.isEmpty {
-            HStack(alignment: .firstTextBaseline, spacing: 16) {
-                Text(title).frame(width: 72, alignment: .leading)
+            HStack(alignment: .firstTextBaseline, spacing: 24) {
+                Text(title).font(SettingsAppearance.title)
+                Spacer(minLength: 16)
                 Text(value)
+                    .foregroundStyle(SettingsAppearance.secondary)
+                    .multilineTextAlignment(.trailing)
                     .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
-    }
-
-    private func trailingInset(in width: CGFloat) -> CGFloat {
-        // The 900–1300 breakpoint adds 12% left padding to the centered panel.
-        let breakpointInset = (900...1300).contains(width) ? width * 0.06 : 0
-        let settingsRegionWidth = width * 0.7
-        let panelWidth: CGFloat = 540
-        let panelMargin = settingsRegionWidth * 0.06
-        let centeredMargin = (settingsRegionWidth - panelWidth + panelMargin) / 2
-        return max(40, centeredMargin + 40 - breakpointInset)
-    }
-
-    private func settingsSection<Content: View>(
-        _ title: String, contentSpacing: CGFloat = 30, @ViewBuilder content: () -> Content
-    ) -> some View {
-        VStack(alignment: .leading, spacing: contentSpacing) {
-            Text(title)
-                .font(DeviceSettingsStyle.heading)
-                .foregroundStyle(DeviceSettingsStyle.sectionText)
-                .accessibilityAddTraits(.isHeader)
-            content()
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func permissionRow(_ permission: RimoPermission) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text(permission.title).font(DeviceSettingsStyle.title)
-                Spacer()
-                Label(model.isPermissionGranted(permission) ? "已允许" : "未授权",
-                      systemImage: model.isPermissionGranted(permission) ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(model.isPermissionGranted(permission) ? RimoStyle.success : DeviceSettingsStyle.text)
-            }
-            Text(permission.purpose)
-            Button(model.isPermissionGranted(permission) ? "打开系统设置" : "授予\(permission.title)权限") {
+        SettingsRow(permission.title, description: permission.purpose) {
+            Button {
                 if model.isPermissionGranted(permission) { model.openPermissionSettings(permission) }
                 else { model.requestPermission(permission) }
+            } label: {
+                SettingsControl(title: model.isPermissionGranted(permission) ? "已允许" : "授予权限",
+                                symbol: model.isPermissionGranted(permission) ? "checkmark" : "arrow.up.right")
             }
-            .accessibilityLabel("\(permission.title)，\(model.isPermissionGranted(permission) ? "打开系统设置" : "授予权限")")
+            .accessibilityLabel("\(permission.title)，\(model.isPermissionGranted(permission) ? "已允许，打开系统设置" : "授予权限")")
         }
     }
 }
@@ -186,6 +175,7 @@ struct PermissionOnboardingView: View {
     var startWithDevice = false
     let close: () -> Void
     @State private var showingWelcome = true
+    @State private var showingVoice = false
     @State private var permission: RimoPermission? = .accessibility
     @State private var showingHelp = false
     @State private var initialized = false
@@ -197,6 +187,11 @@ struct PermissionOnboardingView: View {
         Group {
             if showingWelcome {
                 welcome
+            } else if showingVoice {
+                VoiceSetupView(voice: model.voice) {
+                    model.finishPermissionOnboarding()
+                    close()
+                }
             } else if let permission {
                 permissionPage(permission)
             } else {
@@ -204,8 +199,8 @@ struct PermissionOnboardingView: View {
                     if startWithDevice || model.permissionOnboardingCompleted { close() }
                     else { showingWelcome = true }
                 }, connected: {
-                    model.finishPermissionOnboarding()
-                    close()
+                    if model.voice.needsOnboarding { showingVoice = true }
+                    else { model.finishPermissionOnboarding(); close() }
                 })
             }
         }
@@ -218,7 +213,9 @@ struct PermissionOnboardingView: View {
         .onAppear {
             guard !initialized else { return }
             initialized = true
-            showingWelcome = !startWithDevice && (!model.setupWelcomeCompleted || model.permissionOnboardingCompleted)
+            // Upgraded installs that finished setup before voice existed see only this step.
+            showingVoice = model.permissionOnboardingCompleted && !startWithDevice && model.voice.needsOnboarding
+            showingWelcome = !showingVoice && !startWithDevice && (!model.setupWelcomeCompleted || model.permissionOnboardingCompleted)
             permission = startWithDevice ? nil : model.setupPermission
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -335,6 +332,68 @@ struct PermissionOnboardingView: View {
                 }
             }
         }
+    }
+}
+
+/// The final setup step. Like Voxa and RemotePilot, every root-side voice
+/// component is installed with a single administrator prompt, after which voice
+/// runs automatically whenever the remote is connected.
+private struct VoiceSetupView: View {
+    @ObservedObject var voice: VoiceController
+    let finish: () -> Void
+    @State private var installing = false
+    @State private var error: String?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 28)
+            Image(systemName: "mic.circle.fill")
+                .font(.system(size: 96, weight: .regular))
+                .foregroundStyle(RimoStyle.action)
+                .accessibilityHidden(true)
+                .padding(.bottom, 36)
+            Text("启用遥控器语音")
+                .font(.system(size: 32, weight: .bold))
+                .accessibilityAddTraits(.isHeader)
+                .padding(.bottom, 16)
+            Text("把 Siri 键映射成输入法的语音快捷键（如 Typeless 的 Fn、豆包的 Option），按住 Siri 键说话，声音会通过 Rimo Remote Microphone 交给输入法。安装需要输入一次 Mac 登录密码，之后自动运行。")
+                .font(.system(size: 14))
+                .foregroundStyle(DeviceSettingsStyle.text)
+                .lineSpacing(5)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 640)
+            if let error {
+                Text(error)
+                    .font(.system(size: 14))
+                    .foregroundStyle(RimoStyle.muted)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 640)
+                    .padding(.top, 12)
+            }
+            Button(installing ? "正在安装…" : "启用") {
+                installing = true
+                error = nil
+                Task {
+                    defer { installing = false }
+                    do { try await voice.install(); finish() }
+                    catch { self.error = error.localizedDescription }
+                }
+            }
+            .buttonStyle(RimoButtonStyle(primary: true))
+            .keyboardShortcut(.defaultAction)
+            .disabled(installing)
+            .padding(.top, 28)
+            Button("暂不启用") {
+                voice.declineSetup(); finish()
+            }
+            .buttonStyle(DeviceSettingsLinkStyle())
+            .disabled(installing)
+            .padding(.top, 16)
+            Spacer(minLength: 28)
+        }
+        .padding(.horizontal, 40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

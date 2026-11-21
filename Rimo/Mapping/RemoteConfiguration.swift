@@ -33,6 +33,21 @@ enum RemoteAction: Codable, Equatable {
         case .text: "输入预设文本"
         }
     }
+
+    var holdsUntilRelease: Bool {
+        if case .keyboard(let key) = self { return key.holdsUntilRelease == true }
+        return false
+    }
+
+    /// Voxa's model: the remote "presses the input method's voice key and
+    /// supplies the audio". A lone modifier (Fn, Option, Command, Control,
+    /// Shift) is how Typeless, Doubao, WeChat and similar apps start listening,
+    /// so only these mappings route the remote microphone.
+    var startsVoiceInput: Bool {
+        guard case .keyboard(let key) = self else { return false }
+        return key.modifiers & ~UInt64(NSEvent.ModifierFlags.function.rawValue) == 0
+            && KeyboardShortcut.modifierFlag(for: key.keyCode) != nil
+    }
 }
 
 enum MouseAction: String, Codable, CaseIterable, Identifiable {
@@ -235,6 +250,24 @@ struct TextAction: Codable, Equatable {
 struct ButtonMappings: Codable, Equatable {
     var actions: [String: RemoteAction] = [:]
     private var disabled: Set<String> = []
+
+    init() {}
+
+    private enum CodingKeys: String, CodingKey { case actions, disabled }
+
+    /// Skips actions this build cannot decode (from short-lived development
+    /// builds) instead of failing to load every mapping.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        disabled = try container.decodeIfPresent(Set<String>.self, forKey: .disabled) ?? []
+        let raw = try container.decodeIfPresent([String: OptionalAction].self, forKey: .actions) ?? [:]
+        actions = raw.compactMapValues(\.action)
+    }
+
+    private struct OptionalAction: Decodable {
+        let action: RemoteAction?
+        init(from decoder: Decoder) throws { action = try? RemoteAction(from: decoder) }
+    }
 
     subscript(_ button: RemoteButton, _ trigger: RemoteTrigger = .single) -> RemoteAction? {
         get { actions[trigger.mappingKey(for: button)] }

@@ -130,6 +130,11 @@ struct RemoteVoicePackets {
         return [.audio(payload)]
     }
 
+    mutating func resetPress() {
+        partial = nil
+        pressed = false
+    }
+
     private mutating func connect(_ handle: UInt16) -> [Event] {
         let hadConnection = connection != nil
         connection = handle
@@ -144,5 +149,23 @@ struct RemoteVoicePackets {
 
     private func u16(_ b: [UInt8], _ offset: Int) -> UInt16 {
         UInt16(b[offset]) | UInt16(b[offset + 1]) << 8
+    }
+}
+
+struct VoiceCaptureReadiness {
+    private var startedAt: Double?
+
+    mutating func failure(at now: Double, started: Bool, identified: Bool) -> String? {
+        guard started, !identified else { return nil }
+        if startedAt == nil { startedAt = now }
+        guard now - (startedAt ?? now) >= 15 else { return nil }
+        return "采集已启动，但未识别到遥控器语音连接。请先配置语音环境并确认遥控器已连接。若仍无数据，可使用 Apple 官方蓝牙日志描述文件。"
+    }
+
+    func failure(for record: TraceRecord) -> String? {
+        guard record.kind == 0xfc else { return nil }
+        let note = String(bytes: record.bytes, encoding: .utf8) ?? ""
+        guard note.localizedCaseInsensitiveContains("Bluetooth Profile Required") else { return nil }
+        return "系统尚未允许蓝牙实时采集。请先配置语音环境；仍未通过时可安装 Apple 官方蓝牙日志描述文件。"
     }
 }

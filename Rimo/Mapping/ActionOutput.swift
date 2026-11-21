@@ -14,7 +14,9 @@ enum ActionOutput {
         }
         if case .system(.activateSiri) = action {
             let workspace = NSWorkspace.shared
-            for bundleID in ["com.apple.Siri", "com.apple.siri.launcher"] {
+            // macOS 27 shows Siri through "Siri AI" (com.apple.campo); the older
+            // bundles still launch there but stay invisible, so try it first.
+            for bundleID in ["com.apple.campo", "com.apple.siri.launcher", "com.apple.Siri"] {
                 if let url = workspace.urlForApplication(withBundleIdentifier: bundleID), workspace.open(url) { return }
             }
             throw OutputError.message("无法打开 Siri。请确认已在 macOS 系统设置中启用 Siri。")

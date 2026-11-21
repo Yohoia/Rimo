@@ -126,7 +126,6 @@ struct ShortcutsPage: View {
                     } label: {
                         Label(button.title, systemImage: button.glyph)
                     }
-                    .disabled(button == .siri && model.voice.enabled)
                 }
             }
             .accessibilityLabel("将\(shortcut.name)绑到按键")

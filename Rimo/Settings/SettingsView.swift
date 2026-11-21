@@ -140,9 +140,14 @@ struct RimoSettingsView: View {
     @State private var deletingScene: AppSceneMapping?
     @State private var warmScene = false
     @State private var sceneReady = false
+    @State private var homeRemoteHovered = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var showing3D: Bool { tab == .mapping && sceneReady }
+    private var showingGuide: Bool {
+        showingPermissionGuide || (model.permissionStatusLoaded &&
+            (!model.permissionOnboardingCompleted || model.voice.needsOnboarding))
+    }
     private var editingButton: Bool { tab == .mapping && selected != nil }
     private var showingAppPicker: Bool { deviceDetail && tab == .mapping && addApp }
     private var showingSidebar: Bool { editingButton || showingAppPicker }
@@ -151,7 +156,7 @@ struct RimoSettingsView: View {
         GeometryReader { geometry in
             let width = ActionSidebarLayout.width(in: geometry.size.width)
             content(sidebarWidth: width)
-                .accessibilityHidden(showingPermissionGuide || (model.permissionStatusLoaded && !model.permissionOnboardingCompleted))
+                .accessibilityHidden(showingGuide)
                 .overlay(alignment: .trailing) {
                     ZStack(alignment: .trailing) {
                         if showing3D && showingAppPicker {
@@ -175,7 +180,7 @@ struct RimoSettingsView: View {
                 .clipped()
         }
         .overlay {
-            if showingPermissionGuide || (model.permissionStatusLoaded && !model.permissionOnboardingCompleted) {
+            if showingGuide {
                 PermissionOnboardingView(model: model, startWithDevice: addingRemote, close: {
                     showingPermissionGuide = false
                     addingRemote = false
@@ -224,6 +229,7 @@ struct RimoSettingsView: View {
             if next != .home && next != .mapping { warmScene = false; sceneReady = false }
         }
         .onChange(of: selected) { if $0 != nil { addApp = false } }
+        .onChange(of: deviceDetail) { if $0 { homeRemoteHovered = false } }
         .onChange(of: addApp) { if !$0 { pendingApps = [] } }
         .onChange(of: model.configuration.scenes.map(\.id)) { ids in
             if let selectedSceneID, !ids.contains(selectedSceneID) { self.selectedSceneID = nil }
@@ -265,12 +271,13 @@ struct RimoSettingsView: View {
                                         sceneID: selectedSceneID,
                                         appPickerVisible: showingAppPicker,
                                         presentationActive: showing3D, onReady: { sceneReady = true })
-                                // A near-transparent view renders its first frame while the still covers it.
-                                .opacity(showing3D ? 1 : 0.001)
+                                .offset(y: deviceDetail || homeRemoteHovered ? -12 : 0)
+                                .animation(reduceMotion ? nil : .easeInOut(duration: 0.20), value: deviceDetail || homeRemoteHovered)
+                                .opacity(sceneReady ? 1 : 0.001)
                                 .allowsHitTesting(showing3D)
                                 .accessibilityHidden(!showing3D)
                         }
-                        DeviceHomeView(model: model) {
+                        DeviceHomeView(model: model, hovering: $homeRemoteHovered) {
                             selected = nil
                             addApp = false
                             pendingApps = []
@@ -280,18 +287,21 @@ struct RimoSettingsView: View {
                         .opacity(showing3D ? 0 : 1)
                         .allowsHitTesting(tab == .home)
                         .accessibilityHidden(showing3D)
+                        .animation(pageAnimation, value: showing3D)
                     }
                     .task { warmScene = true }
                 case .device:
                     DevicePage(model: model, openPermissionGuide: { addingRemote = false; showingPermissionGuide = true })
-                        .padding(.top, deviceDetail ? -110 : 0)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay(alignment: .leading) {
-                if deviceDetail && (tab != .mapping || showing3D) {
-                    deviceSidebar
-                }
+                deviceSidebar
+                    .opacity(deviceDetail && (tab != .mapping || showing3D) ? 1 : 0)
+                    .allowsHitTesting(deviceDetail && (tab != .mapping || showing3D))
+                    .accessibilityHidden(!deviceDetail || (tab == .mapping && !showing3D))
+                    .animation(pageAnimation, value: deviceDetail)
+                    .animation(pageAnimation, value: showing3D)
             }
             .overlay(alignment: .bottomTrailing) {
                 if tab == .home {
@@ -303,12 +313,22 @@ struct RimoSettingsView: View {
         }
     }
 
-    @ViewBuilder private func header(sidebarWidth: CGFloat) -> some View {
-        if deviceDetail {
-            deviceHeader(sidebarWidth: sidebarWidth)
-        } else {
+    private var pageAnimation: Animation? {
+        reduceMotion ? nil : .easeInOut(duration: 0.32)
+    }
+
+    private func header(sidebarWidth: CGFloat) -> some View {
+        ZStack {
             homeHeader
+                .opacity(deviceDetail ? 0 : 1)
+                .allowsHitTesting(!deviceDetail)
+                .accessibilityHidden(deviceDetail)
+            deviceHeader(sidebarWidth: sidebarWidth)
+                .opacity(deviceDetail ? 1 : 0)
+                .allowsHitTesting(deviceDetail)
+                .accessibilityHidden(!deviceDetail)
         }
+        .animation(pageAnimation, value: deviceDetail)
     }
 
     private var homeHeader: some View {
@@ -357,8 +377,8 @@ struct RimoSettingsView: View {
             .accessibilityElement(children: .contain)
             .accessibilityLabel("功能菜单")
         }
-        .padding(.leading, 52)
-        .padding(.trailing, 32)
+        .padding(.leading, 44)
+        .padding(.trailing, 48)
         .frame(height: 100)
         .padding(.top, 22)
         .padding(.bottom, 12)
@@ -453,7 +473,7 @@ struct RimoSettingsView: View {
         .padding(.leading, 44)
         .padding(.trailing, showingSidebar ? sidebarWidth + max(32, sidebarWidth * 0.12) : 48)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.29), value: showingSidebar)
-        .frame(height: 76)
+        .frame(height: 100)
         .padding(.top, 22)
         .padding(.bottom, 12)
     }
@@ -480,13 +500,13 @@ struct RimoSettingsView: View {
 
     private func deviceSection(_ title: String, icon: String, destination: SettingsTab) -> some View {
         Button { selected = nil; tab = destination } label: {
-            Label(title, systemImage: icon)
+            Text(title)
                 .font(.system(size: 14, weight: .medium))
-                .labelStyle(.titleAndIcon)
                 .padding(.horizontal, 14)
                 .frame(height: 40)
                 .foregroundStyle(tab == destination ? .white : RimoStyle.ink)
-                .background(tab == destination ? RimoStyle.action : .clear, in: RimoStyle.controlShape)
+                .background(tab == destination ? RimoStyle.action : .clear,
+                            in: RimoStyle.controlShape)
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(tab == destination ? .isSelected : [])
@@ -555,50 +575,40 @@ private struct SceneHeaderApp: View {
     }
 }
 
-/// The home screen displays the bundled still while SceneKit prepares the detail view.
+/// The home interaction and battery badge overlay the shared remote renderer.
 private struct DeviceHomeView: View {
     @ObservedObject var model: RimoModel
+    @Binding var hovering: Bool
     let openDevice: () -> Void
-    @State private var hovered = false
     @FocusState private var focused: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { geometry in
             let imageHeight = RemotePresentation.height(in: geometry.size.height)
-            VStack(spacing: 20) {
-                Button(action: openDevice) {
-                    Image("RemotePreview")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(height: imageHeight)
-                        .opacity(model.isRemoteConnected ? 1 : 0.40)
-                        .shadow(color: .black.opacity(model.isRemoteConnected ? 0.20 : 0.08),
-                                radius: 13, x: 20, y: 15)
-                        .padding(.horizontal, 32)
-                        .padding(.vertical, 4)
-                        .contentShape(Rectangle())
-                        .offset(y: hovered || focused ? -12 : 0)
-                }
-                .buttonStyle(.plain)
-                .focused($focused)
-                .disabled(!model.isRemoteConnected)
-                .onHover { hovered = $0 }
-                .animation(reduceMotion ? nil : .easeInOut(duration: 0.20), value: hovered || focused)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 4)
-                        .strokeBorder(focused ? RimoStyle.action : .clear, lineWidth: 2)
-                        .allowsHitTesting(false)
-                }
-                .accessibilityLabel("Apple TV Siri Remote A2540")
-                .accessibilityHint(model.isRemoteConnected ? "打开 3D 遥控器与按键映射" : "请先连接遥控器")
-                .help(model.isRemoteConnected ? "A2540 · 点击自定义按键" : "A2540 · 未连接")
-
-                DeviceBatteryBadge(model: model)
+            let centerY = geometry.size.height / 2 + RemotePresentation.centerOffset(in: geometry.size.height)
+            Button(action: openDevice) {
+                Color.clear
+                    .frame(width: max(100, imageHeight * 0.30), height: imageHeight + 24)
+                    .contentShape(Rectangle())
+                    .overlay {
+                        RimoStyle.controlShape
+                            .strokeBorder(focused ? RimoStyle.action : .clear, lineWidth: 2)
+                    }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .offset(y: -min(40, geometry.size.height * 0.07))
+            .buttonStyle(.plain)
+            .focused($focused)
+            .disabled(!model.isRemoteConnected)
+            .onHover { hovering = $0 }
+            .onChange(of: focused) { hovering = $0 }
+            .position(x: geometry.size.width / 2, y: centerY - 6)
+            .accessibilityLabel("Apple TV Siri Remote A2540")
+            .accessibilityHint(model.isRemoteConnected ? "打开 3D 遥控器与按键映射" : "请先连接遥控器")
+            .help(model.isRemoteConnected ? "A2540 · 点击自定义按键" : "A2540 · 未连接")
+
+            DeviceBatteryBadge(model: model)
+                .position(x: geometry.size.width / 2, y: centerY + imageHeight / 2 + 40)
         }
+        .onDisappear { hovering = false }
     }
 }
 

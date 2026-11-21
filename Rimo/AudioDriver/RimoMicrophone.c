@@ -12,6 +12,7 @@
 #define DEVICE 2
 #define STREAM 3
 #define PCM 'spcm'
+#define STATUS 'ssta'
 #define UID CFSTR("cn.yohoia.rimo.microphone")
 #define RATE 48000.0
 #define PERIOD 16384
@@ -23,7 +24,18 @@ static _Atomic uint32_t running = 0;
 static _Atomic uint64_t anchor = 0;
 static _Atomic uint64_t lastWrite = 0;
 static double ticksPerFrame;
-static uint64_t writeCursor;
+static uint64_t currentFrame(void);
+static _Atomic uint64_t writeCursor;
+static _Atomic uint64_t writeCalls, readCalls, writtenFrames, readFrames, silentFrames;
+// Eight UInt64 values, native endian, versioned independently of PCM transport.
+static CFDataRef statusData(void) {
+    uint64_t now = currentFrame();
+    uint64_t end = atomic_load(&writeCursor);
+    uint64_t values[] = {1, atomic_load(&running), atomic_load(&writeCalls),
+        atomic_load(&readCalls), atomic_load(&writtenFrames), atomic_load(&readFrames),
+        end > now ? end - now : 0, atomic_load(&silentFrames)};
+    return CFDataCreate(NULL, (const UInt8 *)values, sizeof(values));
+}
 static pthread_mutex_t writerLock = PTHREAD_MUTEX_INITIALIZER;
 static AudioServerPlugInHostRef host;
 static AudioServerPlugInDriverInterface interface;
@@ -88,8 +100,8 @@ static OSStatus propertySize(AudioObjectID object, const AudioObjectPropertyAddr
             return noErr;
         case kAudioObjectPropertyCustomPropertyInfoList:
             if (object != DEVICE) break;
-            *size = sizeof(AudioServerPlugInCustomPropertyInfo); return noErr;
-        case PCM:
+            *size = 2 * sizeof(AudioServerPlugInCustomPropertyInfo); return noErr;
+        case PCM: case STATUS:
             if (object != DEVICE) break;
             *size = sizeof(CFDataRef); return noErr;
     }
@@ -169,8 +181,13 @@ static OSStatus get(AudioServerPlugInDriverRef d, AudioObjectID object, pid_t pi
         case kAudioObjectPropertyManufacturer: text = CFSTR("Rimo"); break;
         case kAudioObjectPropertyOwnedObjects: value = object == 1 ? DEVICE : STREAM; break;
         case kAudioObjectPropertyCustomPropertyInfoList: {
-            AudioServerPlugInCustomPropertyInfo info = {PCM, kAudioServerPlugInCustomPropertyDataTypeCFPropertyList, kAudioServerPlugInCustomPropertyDataTypeNone};
-            memcpy(out, &info, size); return noErr;
+            AudioServerPlugInCustomPropertyInfo info[] = {
+                {PCM, kAudioServerPlugInCustomPropertyDataTypeCFPropertyList, kAudioServerPlugInCustomPropertyDataTypeNone},
+                {STATUS, kAudioServerPlugInCustomPropertyDataTypeCFPropertyList, kAudioServerPlugInCustomPropertyDataTypeNone}};
+            memcpy(out, info, size); return noErr;
+        }
+        case STATUS: {
+            CFDataRef data = statusData(); memcpy(out, &data, size); return noErr;
         }
         case PCM: {
             CFDataRef data = CFDataCreate(NULL, NULL, 0); memcpy(out, &data, size); return noErr;
@@ -234,8 +251,15 @@ static OSStatus set(AudioServerPlugInDriverRef d, AudioObjectID object, pid_t pi
             // current audio because every slot is tagged with its sample time.
             for (size_t i = 0; i < CAPACITY; ++i) atomic_store_explicit(&ring[i], 0, memory_order_relaxed);
             writeCursor = now + LATENCY;
+            atomic_store(&lastWrite, 0);
         } else {
-            if (writeCursor < now + 960 || writeCursor > now + RATE) writeCursor = now + LATENCY;
+            // Preserve queued tails across consecutive presses. Never overwrite
+            // unread audio to hide an overloaded producer.
+            if (writeCursor > now + RATE) {
+                pthread_mutex_unlock(&writerLock);
+                return kAudioHardwareIllegalOperationError;
+            }
+            if (writeCursor <= now) writeCursor = now + LATENCY;
             const UInt8 *source = CFDataGetBytePtr(bytes);
             for (CFIndex i = 0; i < length / 4; ++i) {
                 float sample; memcpy(&sample, source + i * 4, 4);
@@ -246,6 +270,8 @@ static OSStatus set(AudioServerPlugInDriverRef d, AudioObjectID object, pid_t pi
                 atomic_store_explicit(&ring[writeCursor % CAPACITY], slot, memory_order_release);
                 ++writeCursor;
             }
+            atomic_fetch_add(&writeCalls, 1);
+            atomic_fetch_add(&writtenFrames, (uint64_t)length / 4);
             atomic_store_explicit(&lastWrite, mach_absolute_time(), memory_order_release);
         }
         pthread_mutex_unlock(&writerLock);
@@ -297,23 +323,28 @@ static OSStatus io(AudioServerPlugInDriverRef d, AudioObjectID object, AudioObje
     if (object != DEVICE || stream != STREAM) return kAudioHardwareBadObjectError;
     if (operation != kAudioServerPlugInIOOperationReadInput) return noErr;
     if (!cycle || !buffer) return kAudioHardwareIllegalOperationError;
+    atomic_fetch_add(&readCalls, 1);
+    atomic_fetch_add(&readFrames, count);
     float *out = buffer;
     // A slot's 32-bit frame tag wraps after ~25 hours. Idle data must never
     // become audible again when a long-lived HAL process reaches that wrap.
     uint64_t last = atomic_load_explicit(&lastWrite, memory_order_acquire);
     if (!last || mach_absolute_time() - last > (uint64_t)(RATE * 2 * ticksPerFrame)) {
+        atomic_fetch_add(&silentFrames, count);
         memset(out, 0, count * sizeof(float)); return noErr;
     }
     double sampleTime = cycle->mInputTime.mSampleTime;
     if (sampleTime < 0 || !isfinite(sampleTime)) { memset(out, 0, count * sizeof(float)); return noErr; }
     uint64_t first = (uint64_t)sampleTime;
+    uint64_t silence = 0;
     for (UInt32 i = 0; i < count; ++i) {
         uint64_t frame = first + i;
         uint64_t slot = atomic_load_explicit(&ring[frame % CAPACITY], memory_order_acquire);
         uint32_t bits = (uint32_t)slot;
         if ((uint32_t)(slot >> 32) == (uint32_t)(frame + 1)) memcpy(out + i, &bits, 4);
-        else out[i] = 0;
+        else { out[i] = 0; ++silence; }
     }
+    atomic_fetch_add(&silentFrames, silence);
     return noErr;
 }
 static AudioServerPlugInDriverInterface interface = {
