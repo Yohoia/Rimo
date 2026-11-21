@@ -39,6 +39,19 @@ enum RemoteAction: Codable, Equatable {
         return false
     }
 
+    /// Display labels and optional defaults do not make a different binding.
+    func matchesBinding(_ other: RemoteAction) -> Bool {
+        switch (self, other) {
+        case (.keyboard(let lhs), .keyboard(let rhs)):
+            return lhs.keyCode == rhs.keyCode && lhs.modifiers == rhs.modifiers
+                && (lhs.holdsUntilRelease == true) == (rhs.holdsUntilRelease == true)
+                && lhs.outputModifierCodes == rhs.outputModifierCodes
+        case (.openApp(let lhs), .openApp(let rhs)): return lhs.bundleIdentifier == rhs.bundleIdentifier
+        case (.shortcut(let lhs), .shortcut(let rhs)): return lhs.id == rhs.id
+        default: return self == other
+        }
+    }
+
     /// Voxa's model: the remote "presses the input method's voice key and
     /// supplies the audio". A lone modifier (Fn, Option, Command, Control,
     /// Shift) is how Typeless, Doubao, WeChat and similar apps start listening,
@@ -425,6 +438,66 @@ struct RemoteConfiguration: Codable, Equatable {
     var scenes: [AppSceneMapping] = []
     var automatic = false
 
+    /// Move an action within one scope. Inherited conflicts become explicit
+    /// empty overrides so neither global fallback nor scene completion revives them.
+    @discardableResult
+    mutating func assign(_ action: RemoteAction?, to button: RemoteButton, trigger: RemoteTrigger = .single,
+                         sceneID: String? = nil) -> Bool {
+        guard action?.isAssignable(to: button) != false else { return false }
+        let index = sceneID.flatMap { id in scenes.firstIndex { $0.id == id } }
+        guard sceneID == nil || index != nil else { return false }
+        let effective = index.map { scenes[$0].resolved(global: global) } ?? global
+        if let action {
+            for other in RemoteButton.allCases {
+                for mode in RemoteTrigger.allCases where other != button || mode != trigger {
+                    guard effective[other, mode]?.matchesBinding(action) == true else { continue }
+                    editAssignment(other, trigger: mode, sceneIndex: index) {
+                        $0[other, mode] = nil
+                        $0.setEnabled(false, for: other, trigger: mode)
+                    }
+                }
+            }
+        }
+        editAssignment(button, trigger: trigger, sceneIndex: index) {
+            $0[button, trigger] = action
+            $0.setEnabled(action != nil, for: button, trigger: trigger)
+        }
+        if index == nil, let action {
+            // An explicit scene binding keeps ownership when a new inherited
+            // global binding would otherwise introduce the same action twice.
+            for sceneIndex in scenes.indices where scenes[sceneIndex].inherits(button, trigger: trigger) {
+                let resolved = scenes[sceneIndex].resolved(global: global)
+                let conflict = RemoteButton.allCases.contains { other in
+                    RemoteTrigger.allCases.contains { mode in
+                        (other != button || mode != trigger) && resolved[other, mode]?.matchesBinding(action) == true
+                    }
+                }
+                if conflict {
+                    editAssignment(button, trigger: trigger, sceneIndex: sceneIndex) {
+                        $0[button, trigger] = nil
+                        $0.setEnabled(false, for: button, trigger: trigger)
+                    }
+                }
+            }
+        }
+        return true
+    }
+
+    mutating func restoreGlobal(_ button: RemoteButton, trigger: RemoteTrigger, sceneID: String) {
+        guard let index = scenes.firstIndex(where: { $0.id == sceneID }), scenes[index].canFollowGlobal else { return }
+        assign(global[button, trigger], to: button, trigger: trigger, sceneID: sceneID)
+        scenes[index].followGlobal(button, trigger: trigger)
+    }
+
+    private mutating func editAssignment(_ button: RemoteButton, trigger: RemoteTrigger, sceneIndex: Int?,
+                                         _ change: (inout ButtonMappings) -> Void) {
+        if let sceneIndex {
+            scenes[sceneIndex].edit(button, trigger: trigger, global: global, change)
+        } else {
+            change(&global)
+        }
+    }
+
     mutating func completeSceneMappings() {
         for index in scenes.indices {
             for binding in ScenePreset.defaultBindings {
@@ -432,6 +505,7 @@ struct RemoteConfiguration: Codable, Equatable {
                 let source = scene.source(for: binding.button, global: global)
                 guard source[binding.button] == nil,
                       source.isEnabled(binding.button),
+                      !scene.resolved(global: global).actions.values.contains(where: { $0.matchesBinding(binding.action) }),
                       scene.inherits(binding.button) || scene.overrides == nil else { continue }
                 scenes[index].edit(binding.button, global: global) { $0[binding.button] = binding.action }
             }
@@ -459,10 +533,7 @@ struct RemoteConfiguration: Codable, Equatable {
             scenes.append(AppSceneMapping(id: id, name: name, buttons: ButtonMappings(), overrides: []))
         }
         for binding in preset.bindings {
-            scenes[index].edit(binding.button, global: global) {
-                $0[binding.button] = binding.action
-                $0.setEnabled(true, for: binding.button)
-            }
+            assign(binding.action, to: binding.button, sceneID: scenes[index].id)
         }
     }
 }

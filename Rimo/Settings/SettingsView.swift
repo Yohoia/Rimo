@@ -140,7 +140,7 @@ struct RimoSettingsView: View {
     @State private var deletingScene: AppSceneMapping?
     @State private var warmScene = false
     @State private var sceneReady = false
-    @State private var homeRemoteHovered = false
+    @State private var previousVoiceState: VoiceController.State?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var showing3D: Bool { tab == .mapping && sceneReady }
@@ -203,6 +203,25 @@ struct RimoSettingsView: View {
         .tint(RimoStyle.action)
         .foregroundStyle(RimoStyle.ink)
         .font(RimoStyle.body)
+        .rimoToastHost(model.toasts)
+        .onAppear {
+            previousVoiceState = model.voice.state
+            if let error = model.configurationError {
+                model.toasts.show("映射配置读取失败", kind: .error, detail: error)
+            }
+        }
+        .onChange(of: model.voice.state) { next in
+            if case .failed(let message) = next {
+                model.toasts.show("遥控器语音未就绪", kind: .error, detail: message)
+            } else if let previousVoiceState, next == .ready {
+                switch previousVoiceState {
+                case .authorizing, .waiting, .failed:
+                    model.toasts.show("语音已就绪", kind: .success)
+                default: break
+                }
+            }
+            previousVoiceState = next
+        }
         .background {
             Button {
                 if addApp { addApp = false }
@@ -229,7 +248,6 @@ struct RimoSettingsView: View {
             if next != .home && next != .mapping { warmScene = false; sceneReady = false }
         }
         .onChange(of: selected) { if $0 != nil { addApp = false } }
-        .onChange(of: deviceDetail) { if $0 { homeRemoteHovered = false } }
         .onChange(of: addApp) { if !$0 { pendingApps = [] } }
         .onChange(of: model.configuration.scenes.map(\.id)) { ids in
             if let selectedSceneID, !ids.contains(selectedSceneID) { self.selectedSceneID = nil }
@@ -255,13 +273,6 @@ struct RimoSettingsView: View {
     private func content(sidebarWidth: CGFloat) -> some View {
         VStack(spacing: 0) {
             header(sidebarWidth: sidebarWidth)
-            if let error = model.configurationError {
-                Label(error, systemImage: "exclamationmark.triangle")
-                    .font(RimoStyle.body)
-                    .foregroundStyle(RimoStyle.ink)
-                    .padding(10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
             Group {
                 switch tab {
                 case .home, .mapping:
@@ -271,13 +282,11 @@ struct RimoSettingsView: View {
                                         sceneID: selectedSceneID,
                                         appPickerVisible: showingAppPicker,
                                         presentationActive: showing3D, onReady: { sceneReady = true })
-                                .offset(y: deviceDetail || homeRemoteHovered ? -12 : 0)
-                                .animation(reduceMotion ? nil : .easeInOut(duration: 0.20), value: deviceDetail || homeRemoteHovered)
                                 .opacity(sceneReady ? 1 : 0.001)
                                 .allowsHitTesting(showing3D)
                                 .accessibilityHidden(!showing3D)
                         }
-                        DeviceHomeView(model: model, hovering: $homeRemoteHovered) {
+                        DeviceHomeView(model: model, active: tab == .home) {
                             selected = nil
                             addApp = false
                             pendingApps = []
@@ -575,20 +584,29 @@ private struct SceneHeaderApp: View {
     }
 }
 
-/// The home interaction and battery badge overlay the shared remote renderer.
+/// The home interaction and battery badge share the renderer's resting origin.
 private struct DeviceHomeView: View {
     @ObservedObject var model: RimoModel
-    @Binding var hovering: Bool
+    let active: Bool
     let openDevice: () -> Void
     @FocusState private var focused: Bool
+    @State private var pointer: CGPoint?
+    @Environment(\.controlActiveState) private var controlState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { geometry in
             let imageHeight = RemotePresentation.height(in: geometry.size.height)
-            let centerY = geometry.size.height / 2 + RemotePresentation.centerOffset(in: geometry.size.height)
-            Button(action: openDevice) {
+            let centerY = RemotePresentation.centerY(in: geometry.size.height)
+            let target = CGRect(x: geometry.size.width / 2 - max(100, imageHeight * 0.30) / 2,
+                                y: centerY - 6 - (imageHeight + 24) / 2,
+                                width: max(100, imageHeight * 0.30), height: imageHeight + 24)
+            Button {
+                pointer = nil
+                openDevice()
+            } label: {
                 Color.clear
-                    .frame(width: max(100, imageHeight * 0.30), height: imageHeight + 24)
+                    .frame(width: target.width, height: target.height)
                     .contentShape(Rectangle())
                     .overlay {
                         RimoStyle.controlShape
@@ -598,17 +616,78 @@ private struct DeviceHomeView: View {
             .buttonStyle(.plain)
             .focused($focused)
             .disabled(!model.isRemoteConnected)
-            .onHover { hovering = $0 }
-            .onChange(of: focused) { hovering = $0 }
-            .position(x: geometry.size.width / 2, y: centerY - 6)
+            .onContinuousHover { phase in
+                guard active, model.isRemoteConnected else { pointer = nil; return }
+                switch phase {
+                case .active(let location):
+                    pointer = CGPoint(x: target.minX + location.x, y: target.minY + location.y)
+                case .ended: pointer = nil
+                }
+            }
+            .position(x: target.midX, y: target.midY)
             .accessibilityLabel("Apple TV Siri Remote A2540")
-            .accessibilityHint(model.isRemoteConnected ? "打开 3D 遥控器与按键映射" : "请先连接遥控器")
-            .help(model.isRemoteConnected ? "A2540 · 点击自定义按键" : "A2540 · 未连接")
+            .accessibilityHint(model.isRemoteConnected ? "点击进入遥控器与按键映射" : "请先连接遥控器")
 
             DeviceBatteryBadge(model: model)
                 .position(x: geometry.size.width / 2, y: centerY + imageHeight / 2 + 40)
+
+            if let pointer, active, model.isRemoteConnected {
+                HomePointerHint(point: pointer, bounds: geometry.size)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+                    .transition(.opacity)
+            }
         }
-        .onDisappear { hovering = false }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: pointer != nil)
+        .onChange(of: active) { if !$0 { pointer = nil } }
+        .onChange(of: model.isRemoteConnected) { if !$0 { pointer = nil } }
+        .onChange(of: controlState) { if $0 == .inactive { pointer = nil } }
+        .onDisappear { pointer = nil }
+    }
+}
+
+private struct HomePointerHint: View {
+    let point: CGPoint
+    let bounds: CGSize
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            HomePointerRipple()
+                .frame(width: 44, height: 44)
+                .position(point)
+            Text("点击进入")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(RimoStyle.surface)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(RimoStyle.ink, in: RimoStyle.controlShape)
+                .fixedSize()
+                .shadow(color: .black.opacity(0.1), radius: 5, x: 0, y: 2)
+                .position(x: min(max(point.x + 60, 42), max(42, bounds.width - 42)),
+                          y: min(max(point.y + 30, 18), max(18, bounds.height - 18)))
+        }
+        .frame(width: bounds.width, height: bounds.height)
+    }
+}
+
+private struct HomePointerRipple: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var started = Date.now
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { context in
+            let elapsed = max(0, context.date.timeIntervalSince(started))
+            ZStack {
+                ForEach(0..<2) { index in
+                    let progress = reduceMotion ? Double(index + 1) / 3
+                        : (elapsed / 1.25 + Double(index) * 0.5).truncatingRemainder(dividingBy: 1)
+                    Circle()
+                        .strokeBorder(RimoStyle.assignmentAccent.opacity(0.32 * (1 - progress)), lineWidth: 1)
+                        .frame(width: 8 + 32 * progress, height: 8 + 32 * progress)
+                }
+            }
+            .frame(width: 44, height: 44)
+        }
     }
 }
 
@@ -843,5 +922,53 @@ struct SettingsScroll<Content: View>: View {
                 .frame(maxWidth: .infinity)
         }
         .buttonStyle(RimoButtonStyle())
+    }
+}
+
+/// One shared presentation surface for brief feedback across app pages.
+private struct RimoToastHost: ViewModifier {
+    @ObservedObject var center: RimoToastCenter
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content.overlay(alignment: .top) {
+            if let toast = center.current {
+                Button { center.dismiss(id: toast.id) } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: toast.symbol)
+                            .font(.system(size: 14, weight: .medium))
+                            .accessibilityHidden(true)
+                        Text(toast.message)
+                            .font(.system(size: 13, weight: .medium))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .frame(maxWidth: 240)
+                    }
+                    .foregroundStyle(RimoStyle.surface)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(RimoStyle.ink, in: Capsule())
+                    .contentShape(Capsule())
+                    .shadow(color: .black.opacity(0.12), radius: 8, x: 0, y: 4)
+                }
+                .buttonStyle(.plain)
+                .fixedSize(horizontal: true, vertical: false)
+                .help(toast.detail ?? "点击关闭")
+                .accessibilityLabel([toast.message, toast.detail].compactMap { $0 }.joined(separator: "，"))
+                .accessibilityHint("点击关闭提示")
+                .accessibilityAddTraits(.updatesFrequently)
+                .padding(.top, 18)
+                .padding(.horizontal, 24)
+                .id(toast.id)
+                .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: center.current?.id)
+    }
+}
+
+extension View {
+    func rimoToastHost(_ center: RimoToastCenter) -> some View {
+        modifier(RimoToastHost(center: center))
     }
 }

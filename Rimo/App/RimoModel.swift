@@ -6,6 +6,7 @@ import os
 
 @MainActor
 final class RimoModel: ObservableObject {
+    let toasts = RimoToastCenter()
     @Published private(set) var status: HIDMonitor.Status = .stopped
     @Published private(set) var isRemoteConnected = false
     @Published private(set) var batteryPercent: Int?
@@ -32,7 +33,6 @@ final class RimoModel: ObservableObject {
     @Published private(set) var loadingShortcuts = false
     @Published private(set) var shortcutListError: String?
     @Published private(set) var runningShortcuts: Set<UUID> = []
-    @Published private(set) var shortcutFeedback: String?
     var isSettingsFocused: () -> Bool = { false }
 
     private var permissionRefresh: Task<Void, Never>?
@@ -257,7 +257,8 @@ final class RimoModel: ObservableObject {
     func setAction(_ action: RemoteAction?, for button: RemoteButton, trigger: RemoteTrigger = .single,
                    sceneID: String? = nil) -> Bool {
         guard action?.isAssignable(to: button) != false else { return false }
-        return updateMappings(button, trigger: trigger, sceneID: sceneID) { $0[button, trigger] = action }
+        guard sceneID == nil || sceneID.flatMap(scene) != nil else { return false }
+        return updateConfiguration { $0.assign(action, to: button, trigger: trigger, sceneID: sceneID) }
     }
 
     func setActionEnabled(_ enabled: Bool, for button: RemoteButton, trigger: RemoteTrigger = .single, sceneID: String? = nil) {
@@ -266,8 +267,7 @@ final class RimoModel: ObservableObject {
 
     func followGlobal(_ button: RemoteButton, trigger: RemoteTrigger = .single, sceneID: String) {
         updateConfiguration {
-            guard let index = $0.scenes.firstIndex(where: { $0.id == sceneID }) else { return }
-            $0.scenes[index].followGlobal(button, trigger: trigger)
+            $0.restoreGlobal(button, trigger: trigger, sceneID: sceneID)
         }
     }
 
@@ -331,7 +331,10 @@ final class RimoModel: ObservableObject {
 
     @discardableResult
     private func updateConfiguration(_ edit: (inout RemoteConfiguration) -> Void) -> Bool {
-        guard !configurationReadFailed else { return false }
+        guard !configurationReadFailed else {
+            toasts.show("无法保存映射", kind: .error, detail: configurationError)
+            return false
+        }
         var next = configuration
         edit(&next)
         do {
@@ -343,6 +346,7 @@ final class RimoModel: ObservableObject {
             return true
         } catch {
             configurationError = "未能保存映射。"
+            toasts.show("映射保存失败", kind: .error, detail: configurationError)
             return false
         }
     }
@@ -359,20 +363,21 @@ final class RimoModel: ObservableObject {
                 self?.loadedShortcuts = true
             } catch {
                 self?.shortcutListError = "无法读取快捷指令：\(error.localizedDescription)"
+                self?.toasts.show("快捷指令读取失败", kind: .error, detail: error.localizedDescription)
             }
         }
     }
 
     func runShortcut(_ shortcut: SystemShortcut) {
         guard runningShortcuts.insert(shortcut.id).inserted else { return }
-        shortcutFeedback = "正在运行「\(shortcut.name)」…"
+        toasts.show("正在运行快捷指令", detail: shortcut.name)
         Task { [weak self] in
             defer { self?.runningShortcuts.remove(shortcut.id) }
             do {
                 try await ShortcutsCLI.run(shortcut)
-                self?.shortcutFeedback = "已运行「\(shortcut.name)」。"
+                self?.toasts.show("快捷指令已运行", kind: .success, detail: shortcut.name)
             } catch {
-                self?.shortcutFeedback = "无法运行「\(shortcut.name)」：\(error.localizedDescription)"
+                self?.toasts.show("快捷指令运行失败", kind: .error, detail: error.localizedDescription)
             }
         }
     }
@@ -381,6 +386,8 @@ final class RimoModel: ObservableObject {
         paused.toggle()
         scrollMode.reset()
         cancelPendingPresses()
+        syncVoice()
+        toasts.show(paused ? "映射已暂停" : "映射已恢复")
     }
 
     func toggleScrollMode() {
@@ -409,12 +416,6 @@ final class RimoModel: ObservableObject {
                 pending.task.cancel()
                 _ = pending.key.post(pressed: false)
             }
-            if button == .siri {
-                // The remote only sends audio while Siri is held. Route it to
-                // Rimo Remote Microphone only when this app's Siri mapping
-                // presses an input method's voice key.
-                voice.siriPressed(routingAudio: siriStartsVoiceInput(in: NSWorkspace.shared.frontmostApplication?.bundleIdentifier))
-            }
         }
 
         let app = NSWorkspace.shared.frontmostApplication
@@ -423,6 +424,9 @@ final class RimoModel: ObservableObject {
         guard canDispatch() else {
             Self.log.info("\(button.rawValue, privacy: .public) ignored: paused=\(self.paused) recording=\(self.recording != nil)")
             return
+        }
+        if edge == .pressed, button == .siri {
+            voice.siriPressed(routingAudio: siriStartsVoiceInput(in: app?.bundleIdentifier))
         }
         if let scroll = scrollMode.scroll(for: button) {
             if edge == .pressed { dispatch(.scroll(scroll)) }
@@ -515,7 +519,7 @@ final class RimoModel: ObservableObject {
     /// an enabled scene) presses a voice key.
     private func syncVoice() {
         let mappings = [configuration.global] + configuration.scenes.filter(\.enabled).map { $0.resolved(global: configuration.global) }
-        voice.setWanted(mappings.contains { buttons in
+        voice.setWanted(!paused && mappings.contains { buttons in
             RemoteTrigger.allCases.contains { buttons.isEnabled(.siri, trigger: $0) && buttons[.siri, $0]?.startsVoiceInput == true }
         })
     }
@@ -542,13 +546,18 @@ final class RimoModel: ObservableObject {
         }
         if let button, case .keyboard(let key) = action, key.holdsUntilRelease == true {
             if key.post(pressed: true) { heldOutputs[button] = key }
-            else { actionError = "无法发送按键，请检查辅助功能权限。"; canPost = CGPreflightPostEventAccess() }
+            else {
+                actionError = "无法发送按键，请检查辅助功能权限。"
+                toasts.show("请开启辅助功能权限", kind: .error)
+                canPost = CGPreflightPostEventAccess()
+            }
             return
         }
         do { try ActionOutput.perform(action) }
         catch {
             Self.log.error("action failed: \(error.localizedDescription, privacy: .public)")
             actionError = error.localizedDescription; canPost = CGPreflightPostEventAccess()
+            toasts.show("动作执行失败", kind: .error, detail: error.localizedDescription)
         }
     }
 }

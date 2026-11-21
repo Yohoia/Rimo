@@ -4,6 +4,10 @@ import SwiftUI
 import simd
 
 enum RemotePresentation {
+    static func centerY(in availableHeight: CGFloat) -> CGFloat {
+        availableHeight / 2 + centerOffset(in: availableHeight)
+    }
+
     static func centerOffset(in availableHeight: CGFloat) -> CGFloat {
         -5 - min(40, availableHeight * 0.07)
     }

@@ -38,7 +38,60 @@ struct RemoteConfigurationTest {
         try verifyOtherActions()
         verifyRemotePresses()
         try verifySiriVoiceKey()
+        try verifyUniqueAssignments()
         print("Scenes, mapping persistence, scroll mode, Siri voice key, HID de-duplication and trigger recognition passed.")
+    }
+
+    static func verifyUniqueAssignments() throws {
+        let fn = RemoteAction.keyboard(KeyboardShortcut(option: .init(id: UInt16(kVK_Function), title: "Fn"), flags: []))
+        var config = RemoteConfiguration(automatic: true)
+        precondition(config.assign(fn, to: .home))
+        precondition(config.assign(fn, to: .home, trigger: .doublePress))
+        precondition(config.global[.home] == nil && !config.global.isEnabled(.home))
+        precondition(config.global[.home, .doublePress] == fn)
+        precondition(config.assign(fn, to: .siri, trigger: .hold))
+        precondition(config.global[.home, .doublePress] == nil)
+        precondition(config.global[.siri, .hold] == fn)
+        // A display-label change is the same physical shortcut.
+        let renamed = RemoteAction.keyboard(KeyboardShortcut(option: .init(id: UInt16(kVK_Function), title: "Globe"), flags: []))
+        precondition(config.assign(renamed, to: .select))
+        precondition(config.global[.siri, .hold] == nil && config.global[.select] == renamed)
+        config.global[.back] = .media(.mute)
+        config.global.setEnabled(false, for: .back)
+        precondition(config.assign(.media(.mute), to: .mute))
+        precondition(config.global[.back] == nil && config.global.isEnabled(.mute))
+
+        config.scenes = [
+            .init(id: "reader", name: "Reader", buttons: ButtonMappings(), overrides: []),
+            .init(id: "slides", name: "Slides", buttons: ButtonMappings(), overrides: [])
+        ]
+        precondition(config.scenes[0].inherits(.select))
+        precondition(config.assign(fn, to: .siri, trigger: .doublePress, sceneID: "reader"))
+        precondition(config.action(for: .select, in: "reader") == nil)
+        precondition(!config.scenes[0].inherits(.select))
+        precondition(config.action(for: .siri, trigger: .doublePress, in: "reader") == fn)
+        precondition(config.global[.select] == renamed)
+        precondition(config.action(for: .select, in: "slides") == renamed)
+        // Clearing a displaced default must survive startup completion and persistence.
+        precondition(config.assign(.media(.volumeUp), to: .home, sceneID: "reader"))
+        precondition(config.action(for: .volumeUp, in: "reader") == nil)
+        config.completeSceneMappings()
+        precondition(config.action(for: .volumeUp, in: "reader") == nil)
+        let restored = try JSONDecoder().decode(RemoteConfiguration.self, from: JSONEncoder().encode(config))
+        precondition(restored == config && restored.action(for: .volumeUp, in: "reader") == nil)
+        let before = config
+        precondition(!config.assign(fn, to: .home, sceneID: "missing"))
+        precondition(!config.assign(.system(.toggleScrollMode), to: .up))
+        precondition(config == before)
+        // New inherited globals do not duplicate a scene's explicit owner.
+        precondition(config.assign(fn, to: .mute))
+        precondition(config.action(for: .mute, in: "reader") == nil)
+        precondition(config.action(for: .siri, trigger: .doublePress, in: "reader") == fn)
+        config.restoreGlobal(.mute, trigger: .single, sceneID: "reader")
+        precondition(config.scenes[0].inherits(.mute))
+        precondition(config.action(for: .mute, in: "reader") == fn)
+        precondition(config.action(for: .siri, trigger: .doublePress, in: "reader") == nil)
+        print("Unique bindings: trigger moves, cross-button moves, labels, disabled bindings, scene isolation, inherited conflicts and persistence passed.")
     }
 
     static func verifySiriVoiceKey() throws {

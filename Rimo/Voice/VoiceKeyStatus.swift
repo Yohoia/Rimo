@@ -7,6 +7,7 @@ import SwiftUI
 struct VoiceKeyStatus: View {
     @ObservedObject var voice: VoiceController
     @ObservedObject var helper: VoiceHelperClient
+    var horizontalInset: CGFloat = 32
     @State private var working = false
     @State private var message: String?
 
@@ -38,7 +39,7 @@ struct VoiceKeyStatus: View {
                     .disabled(working || helper.deploying)
             }
         }
-        .padding(.horizontal, 32)
+        .padding(.horizontal, horizontalInset)
         .padding(.vertical, 14)
         .onAppear { helper.refreshStatus() }
     }

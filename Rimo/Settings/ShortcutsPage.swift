@@ -32,16 +32,7 @@ struct ShortcutsPage: View {
                 }
                 .disabled(model.loadingShortcuts)
             }
-            if let error = model.shortcutListError {
-                Label(error, systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(RimoStyle.ink)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if let feedback = model.shortcutFeedback {
-                Text(feedback).foregroundStyle(RimoStyle.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityAddTraits(.updatesFrequently)
-            }
+
 
             SettingsCard {
                 if model.loadingShortcuts && results.isEmpty {

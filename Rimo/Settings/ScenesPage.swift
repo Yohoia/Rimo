@@ -8,7 +8,6 @@ struct ScenesPage: View {
     @State private var sheet: SceneSheet?
     @State private var editAfterDismissal: AppSceneMapping?
     @State private var deleting: AppSceneMapping?
-    @State private var feedback: SceneFeedback?
 
     private enum SceneSheet: Identifiable {
         case add, presets, edit(AppSceneMapping)
@@ -20,12 +19,6 @@ struct ScenesPage: View {
             case .edit(let scene): "edit:\(scene.id)"
             }
         }
-    }
-
-    private struct SceneFeedback {
-        let title: String
-        var isError = false
-        var needsAutomaticSwitching = false
     }
 
     var body: some View {
@@ -43,12 +36,6 @@ struct ScenesPage: View {
                     Label("添加场景", systemImage: "plus")
                 }
                 .buttonStyle(RimoButtonStyle(primary: true))
-            }
-            if let feedback {
-                let hint = feedback.needsAutomaticSwitching && !model.configuration.automatic ? " 开启自动切换后生效。" : ""
-                Label(feedback.title + hint, systemImage: feedback.isError ? "exclamationmark.triangle" : "checkmark.circle")
-                    .font(RimoStyle.prose)
-                    .foregroundStyle(RimoStyle.ink)
             }
 
             if !model.canListen || !model.canPost {
@@ -90,20 +77,23 @@ struct ScenesPage: View {
                 sheet = .edit(scene)
             }
         }) { item in
-            switch item {
-            case .add:
-                AppScenePicker(model: model) { apps in
-                    feedback = nil
-                    editAfterDismissal = apps.first.flatMap { model.scene($0.id) }
-                    sheet = nil
+            Group {
+                switch item {
+                case .add:
+                    AppScenePicker(model: model) { apps in
+                        editAfterDismissal = apps.first.flatMap { model.scene($0.id) }
+                        sheet = nil
+                    }
+                case .presets:
+                    ScenePresetPicker(model: model) { preset, app in
+                        model.toasts.show("场景预设已应用", kind: .success,
+                                          detail: "\(preset.title) · \(app.name)" + (model.configuration.automatic ? "" : "，开启自动切换后生效。"))
+                    }
+                case .edit(let scene):
+                    SceneEditor(model: model, sceneID: scene.id, name: scene.name)
                 }
-            case .presets:
-                ScenePresetPicker(model: model) { preset, app in
-                    feedback = .init(title: "已将「\(preset.title)」应用到「\(app.name)」。", needsAutomaticSwitching: true)
-                }
-            case .edit(let scene):
-                SceneEditor(model: model, sceneID: scene.id, name: scene.name)
             }
+            .rimoToastHost(model.toasts)
         }
         .alert("删除场景？", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
             Button("取消", role: .cancel) { deleting = nil }

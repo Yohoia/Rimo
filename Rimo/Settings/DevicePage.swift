@@ -121,6 +121,8 @@ struct DevicePage: View {
                             permissionRow(permission)
                         }
                     }
+
+                    VoiceKeyStatus(voice: model.voice, helper: model.voice.helper, horizontalInset: 0)
                 }
                 .frame(width: min(680, geometry.size.width * 0.7 - 72), alignment: .leading)
                 .padding(.top, 54)

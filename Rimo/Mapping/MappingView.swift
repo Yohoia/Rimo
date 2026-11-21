@@ -252,7 +252,7 @@ private struct ButtonStage {
         // The lateral limit reserves space for both label columns beside the model.
         let focusedUnit = max(restingUnit, min((size.height - 90) / 8.69,
                                               (viewportWidth - RemoteModelView.focusedHorizontalInset - 12) / 3.9))
-        let restingOrigin = size.height / 2 + RemotePresentation.centerOffset(in: size.height)
+        let restingOrigin = RemotePresentation.centerY(in: size.height)
         let focusedOrigin = 32 + 6.76 * focusedUnit
         return RemoteProjection(size: CGSize(width: viewportWidth, height: size.height),
                                 unit: interpolate(restingUnit, focusedUnit),
@@ -319,6 +319,9 @@ struct ButtonMappingEditor: View {
     @State private var expandedAction: ActionRowID?
     @State private var actionQuery = ""
     @State private var openGroups: Set<ActionGroup> = []
+    @State private var showingActionSetup = false
+    @State private var rowTriggers: [ActionRowID: RemoteTrigger] = [:]
+    @State private var recommendedOrder: [ActionChoice] = []
     @FocusState private var searchingActions: Bool
 
     private var mappings: ButtonMappings { model.mappings(sceneID: sceneID) }
@@ -349,9 +352,33 @@ struct ButtonMappingEditor: View {
         .font(RimoStyle.body)
         .onAppear(perform: loadTextDraft)
         .onAppear(perform: revealCurrentConfiguration)
+        .onAppear { recommendedOrder = groupChoices(.recommended) }
         .onChange(of: trigger) { _ in loadTextDraft() }
-        .onChange(of: action) { _ in if kind.wrappedValue != .text { loadTextDraft() } }
+        .onChange(of: action) { next in
+            if kind.wrappedValue != .text { loadTextDraft() }
+            if let next, let row = expandedAction, row.group == .recommended {
+                let replacement = ActionChoice(current: next)
+                recommendedOrder = recommendedOrder.map { $0 == row.choice ? replacement : $0 }
+                expandedAction = ActionRowID(group: .recommended, choice: replacement)
+            }
+        }
         .onDisappear(perform: stopCapture)
+        .sheet(isPresented: $showingActionSetup, onDismiss: closeActionConfiguration) {
+            VStack(alignment: .leading, spacing: 20) {
+                HStack {
+                    Text(kind.wrappedValue.title).font(RimoStyle.title)
+                    Spacer()
+                    Button("完成") { showingActionSetup = false }
+                        .keyboardShortcut(.defaultAction)
+                }
+                Text("\(button.title) · \(trigger.title)")
+                    .font(RimoStyle.label).foregroundStyle(RimoStyle.muted)
+                ScrollView { configurationFields }
+            }
+            .padding(24)
+            .frame(width: 380, height: 480)
+            .rimoToastHost(model.toasts)
+        }
         .background {
             if capturing {
                 ShortcutCapture { shortcut in
@@ -377,56 +404,10 @@ struct ButtonMappingEditor: View {
             .frame(height: 70)
             .background(RimoStyle.actionSidebarHeader)
 
-            triggerTabs
-            sidebarDivider
-            if voiceKey, action?.startsVoiceInput == true {
-                VoiceKeyStatus(voice: model.voice, helper: model.voice.helper)
-                sidebarDivider
-            }
             actionBrowser
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(RimoStyle.surface)
-    }
-
-    /// Single, double and long press as tabs showing each trigger's action.
-    private var triggerTabs: some View {
-        HStack(spacing: 6) {
-            ForEach(RemoteTrigger.allCases) { item in
-                let selected = trigger == item
-                let current = mappings.isEnabled(button, trigger: item) ? mappings[button, item] : nil
-                Button { changeTrigger(to: item) } label: {
-                    VStack(spacing: 3) {
-                        Text(item.title)
-                            .font(.system(size: 13, weight: .semibold))
-                        Text(triggerSummary(item, current))
-                            .font(.system(size: 11))
-                            .lineLimit(1)
-                            .opacity(0.8)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .foregroundStyle(selected ? RimoStyle.actionLabel : RimoStyle.ink)
-                    .background(selected ? RimoStyle.action : RimoStyle.canvas, in: RimoStyle.controlShape)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityAddTraits(selected ? .isSelected : [])
-                .accessibilityLabel("\(item.title)，\(triggerSummary(item, current))")
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-    }
-
-    private func triggerSummary(_ item: RemoteTrigger, _ action: RemoteAction?) -> String {
-        // "Hold until release" on single press starts at once, so the other triggers are unused.
-        if item != .single, let single = mappings[button], mappings.isEnabled(button), single.holdsUntilRelease {
-            return "由单击接管"
-        }
-        guard let action else { return "未设置" }
-        if case .keyboard(let key) = action { return key.title + (key.holdsUntilRelease == true ? " 按住" : "") }
-        return action.title
     }
 
     private var sceneEditor: some View {
@@ -508,19 +489,10 @@ struct ButtonMappingEditor: View {
             }
             actionSearchField
             sidebarDivider
-            ScrollViewReader { proxy in
-                ScrollView {
-                    actionGroups(groups, query: query, searching: searching)
-                }
-                .onChange(of: expandedAction) { row in
-                    if let row { proxy.scrollTo(row) }
-                }
+            ScrollView {
+                actionGroups(groups, query: query, searching: searching)
             }
-            if let error = model.configurationError ?? (expandedAction == nil ? model.actionError : nil) {
-                Label(error, systemImage: "exclamationmark.triangle")
-                    .font(RimoStyle.label)
-                    .padding(16)
-            }
+
         }
         .onChange(of: actionQuery) { _ in closeActionConfiguration() }
         .onChange(of: searchingActions) { if $0 { stopCapture() } }
@@ -661,69 +633,93 @@ struct ButtonMappingEditor: View {
         let row = ActionRowID(group: group, choice: choice)
         let expanded = expandedAction == row
         let restriction = assignmentRestriction(for: choice.action)
-        let current = restriction == nil && (action.map(choice.represents) ?? false)
-        let highlighted = expanded || (expandedAction == nil && current && (group == .recommended || !actionQuery.isEmpty))
+        let assigned = RemoteTrigger.allCases.first { mode in
+            mappings[button, mode].map(choice.represents) == true
+        }
+        let mode = assigned ?? rowTriggers[row] ?? .single
+        let enabled = assigned.map { mappings.isEnabled(button, trigger: $0) } ?? false
+        let highlighted = expanded || (assigned != nil && (group == .recommended || !actionQuery.isEmpty))
         return VStack(spacing: 8) {
-            Button {
-                if expanded {
-                    closeActionConfiguration()
-                    return
-                }
-                searchingActions = false
-                if let immediate = choice.action, !current {
-                    guard model.setAction(immediate, for: button, trigger: trigger, sceneID: sceneID) else { return }
-                }
-                kind.wrappedValue = choice.kind
-                draftFlags = []
-                expandedAction = row
-            } label: {
-                HStack(spacing: 15) {
-                    Circle()
-                        .fill(highlighted ? RimoStyle.assignmentInk : RimoStyle.actionRadio)
-                        .overlay {
-                            if highlighted { Circle().fill(RimoStyle.assignmentAccent).frame(width: 5, height: 5) }
+            HStack(spacing: 4) {
+                Button {
+                    selectAction(choice, in: group, trigger: mode, configure: true)
+                } label: {
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(choice.title)
+                                .font(.system(size: 14, weight: highlighted ? .medium : .regular))
+                                .lineLimit(2)
+                            if let restriction {
+                                Text(restriction).font(RimoStyle.label)
+                            } else if assigned != nil && !enabled {
+                                Text("已停用").font(RimoStyle.label).foregroundStyle(RimoStyle.muted)
+                            }
                         }
-                        .frame(width: 18, height: 18)
-                        .accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(choice.title)
-                            .font(.system(size: 14, weight: highlighted ? .semibold : .regular))
-                        if current, case .configure = choice, let action {
-                            Text(action.title)
-                                .font(RimoStyle.label)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        if let restriction {
-                            Text(restriction)
-                                .font(RimoStyle.label)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
+                        Spacer(minLength: 0)
                     }
-                    Spacer(minLength: 0)
-                    if restriction != nil {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 14))
-                            .accessibilityHidden(true)
-                    }
+                    .foregroundStyle(restriction != nil ? RimoStyle.muted : RimoStyle.ink)
+                    .padding(.leading, 16)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
-                .foregroundStyle(restriction != nil ? RimoStyle.muted : highlighted ? RimoStyle.assignmentInk : RimoStyle.ink)
-                .padding(.horizontal, 16)
-                .frame(minHeight: highlighted || restriction != nil ? 48 : 37)
-            }
-            .buttonStyle(ActionBrowserRowStyle(current: highlighted, expanded: expanded))
-            .disabled(restriction != nil)
-            .accessibilityAddTraits(highlighted ? .isSelected : [])
-            .accessibilityValue(expanded ? "已展开" : "")
+                .buttonStyle(.plain)
+                .accessibilityLabel(choice.title)
+                .accessibilityValue(assigned.map { "\($0.title)，\(enabled ? "已绑定" : "已停用")" } ?? "未绑定")
 
-            if expanded {
-                configurationFields
-                    .padding(16)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RimoStyle.actionConfigurationFill, in: RoundedRectangle(cornerRadius: 8))
+                ActionTriggerPicker(selection: mode, assigned: assigned != nil && enabled,
+                                    actionTitle: choice.title,
+                                    unavailable: unavailableTriggers) { selected in
+                    selectAction(choice, in: group, trigger: selected)
+                }
+                .frame(width: 100, alignment: .trailing)
+                .padding(.trailing, 10)
             }
+            .background(highlighted ? RimoStyle.assignmentAccent.opacity(0.08) : .clear,
+                        in: RimoStyle.controlShape)
+            .contentShape(Rectangle())
+            .disabled(restriction != nil || editingRecording)
+
         }
         .padding(.bottom, highlighted ? 6 : 0)
         .id(row)
+    }
+
+    private var unavailableTriggers: Set<RemoteTrigger> {
+        if let single = mappings[button], mappings.isEnabled(button), single.holdsUntilRelease {
+            return [.doublePress, .hold]
+        }
+        return []
+    }
+
+    private func selectAction(_ choice: ActionChoice, in group: ActionGroup, trigger selected: RemoteTrigger,
+                              configure: Bool = false) {
+        guard !unavailableTriggers.contains(selected) else { return }
+        let row = ActionRowID(group: group, choice: choice)
+        let previous = choice.action.flatMap { candidate in
+            RemoteButton.allCases.lazy.flatMap { other in
+                RemoteTrigger.allCases.map { (other, $0) }
+            }.first { other, mode in
+                (other != button || mode != selected) && mappings[other, mode]?.matchesBinding(candidate) == true
+            }
+        }
+        stopCapture()
+        searchingActions = false
+        closeActionConfiguration()
+        trigger = selected
+        rowTriggers[row] = selected
+        if let immediate = choice.action {
+            guard model.setAction(immediate, for: button, trigger: selected, sceneID: sceneID) else { return }
+        }
+        kind.wrappedValue = choice.kind
+        draftFlags = []
+        loadTextDraft()
+        expandedAction = row
+        if case .configure = choice { showingActionSetup = true }
+        else if configure, case .saved = choice { showingActionSetup = true }
+        if let previous {
+            model.toasts.show("已改为\(selected.title)", kind: .success,
+                              detail: "「\(choice.title)」：\(previous.0.title) · \(previous.1.title) → \(button.title) · \(selected.title)")
+        }
     }
 
     private func assignmentRestriction(for action: RemoteAction?) -> String? {
@@ -753,13 +749,17 @@ struct ButtonMappingEditor: View {
             }
             var result = suggested
             if !result.contains(.configure(.keyboard)) { result.append(.configure(.keyboard)) }
-            if let action {
-                let current = ActionChoice(current: action)
+            let assigned = RemoteTrigger.allCases.compactMap { mappings[button, $0] }.map(ActionChoice.init(current:))
+            for current in assigned.reversed() {
                 result.removeAll { $0 == current }
                 result.insert(current, at: 0)
             }
             if let expandedAction, expandedAction.group == .recommended, !result.contains(expandedAction.choice) {
                 result.insert(expandedAction.choice, at: 0)
+            }
+            if !recommendedOrder.isEmpty {
+                result = recommendedOrder.filter { result.contains($0) }
+                    + result.filter { !recommendedOrder.contains($0) }
             }
             return result
         case .keyboard:
@@ -785,7 +785,7 @@ struct ButtonMappingEditor: View {
     private func revealCurrentConfiguration() {
         guard inSidebar, let action else { return }
         let choice = ActionChoice(current: action)
-        if case .configure = choice {
+        if case .saved = choice {
             expandedAction = ActionRowID(group: .recommended, choice: choice)
         }
     }
@@ -1265,7 +1265,7 @@ struct ButtonMappingEditor: View {
     }
 
     private enum ActionChoice: Hashable, Identifiable {
-        case configure(EditorKind), key(UInt16), scroll(ScrollAction.Direction), media(MediaAction), mouse(MouseAction), system(SystemAction)
+        case configure(EditorKind), saved(SavedAction), key(UInt16), scroll(ScrollAction.Direction), media(MediaAction), mouse(MouseAction), system(SystemAction)
 
         static let presetKeyCodes = KeyboardShortcut.navigationKeys.map(\.id)
         var id: Self { self }
@@ -1273,6 +1273,7 @@ struct ButtonMappingEditor: View {
         var kind: EditorKind {
             switch self {
             case .configure(let kind): kind
+            case .saved(let saved): EditorKind(action: saved.action)
             case .key: .keyboard
             case .scroll: .scroll
             case .media: .media
@@ -1284,6 +1285,7 @@ struct ButtonMappingEditor: View {
         var action: RemoteAction? {
             switch self {
             case .configure: nil
+            case .saved(let saved): saved.action
             case .key(let code): KeyboardShortcut.navigationKeys.first { $0.id == code }
                 .map { .keyboard(KeyboardShortcut(option: $0, flags: [])) }
             case .scroll(let direction): .scroll(.init(direction: direction))
@@ -1327,13 +1329,14 @@ struct ButtonMappingEditor: View {
             case .media(let item): self = .media(item)
             case .mouse(let item): self = .mouse(item)
             case .system(let item): self = .system(item)
-            default: self = .configure(EditorKind(action: current))
+            default: self = .saved(SavedAction(action: current))
             }
         }
 
         func represents(_ current: RemoteAction) -> Bool {
             switch self {
-            case .configure: return self == ActionChoice(current: current)
+            case .configure: return false
+            case .saved(let saved): return saved.action.matchesBinding(current)
             case .scroll(let direction):
                 if case .scroll(let value) = current { return value.direction == direction }
                 return false
@@ -1379,6 +1382,12 @@ struct ButtonMappingEditor: View {
             default: []
             }
         }
+    }
+
+    private struct SavedAction: Hashable {
+        let action: RemoteAction
+        static func == (lhs: Self, rhs: Self) -> Bool { lhs.action == rhs.action }
+        func hash(into hasher: inout Hasher) { hasher.combine(action.title) }
     }
 
     private enum EditorKind: String, Hashable, CaseIterable, Identifiable {
@@ -1511,6 +1520,90 @@ private struct OpenApplicationFields: View {
         guard save(target) else { return }
         draftPath = nil
         error = nil
+    }
+}
+
+/// A single visible glyph unfolds into a three-position rail. The rail is
+/// translated, rather than rebuilt, so the selected glyph survives collapse.
+private struct ActionTriggerPicker: View {
+    let selection: RemoteTrigger
+    let assigned: Bool
+    let actionTitle: String
+    let unavailable: Set<RemoteTrigger>
+    let select: (RemoteTrigger) -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @FocusState private var focused: RemoteTrigger?
+    @State private var hovering = false
+
+    private let step: CGFloat = 32
+    private var open: Bool { hovering || focused != nil }
+    private var index: Int { RemoteTrigger.allCases.firstIndex(of: selection) ?? 0 }
+
+    private var rail: some View {
+        ZStack(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 5)
+                .fill(assigned ? RimoStyle.assignmentAccent : RimoStyle.line)
+                .frame(width: 28, height: 26)
+                .offset(x: CGFloat(index) * step + 2)
+                .allowsHitTesting(false)
+            HStack(spacing: 4) {
+                ForEach(RemoteTrigger.allCases) { mode in
+                    Button { select(mode) } label: {
+                        glyph(mode)
+                            .foregroundStyle(assigned && selection == mode ? RimoStyle.assignmentInk : RimoStyle.ink)
+                            .opacity(unavailable.contains(mode) ? 0.3 : 1)
+                            .frame(width: 28, height: 30)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .focused($focused, equals: mode)
+                    .disabled(unavailable.contains(mode))
+                    .allowsHitTesting(open || mode == selection)
+                    .accessibilityHidden(!open && mode != selection)
+                    .accessibilityLabel("\(actionTitle)，\(mode.title)")
+                    .accessibilityValue(assigned && selection == mode ? "已绑定" : "未绑定")
+                    .accessibilityAddTraits(assigned && selection == mode ? .isSelected : [])
+                    .help(unavailable.contains(mode) ? "单击使用按住至松开，暂不识别\(mode.title)" : "\(mode.title) · 点击绑定")
+                }
+            }
+            .padding(.horizontal, 2)
+        }
+        .frame(width: 96, height: 30, alignment: .leading)
+    }
+
+    var body: some View {
+        Color.clear
+        .frame(width: open ? 96 : 32, height: 30)
+        .overlay(alignment: .leading) {
+            rail.offset(x: open ? 0 : -CGFloat(index) * step)
+        }
+        .background(RimoStyle.canvas, in: RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .contentShape(Rectangle())
+        .overlay {
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(focused != nil ? RimoStyle.assignmentAccent : .clear)
+                .allowsHitTesting(false)
+        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: open)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: selection)
+        .onHover {
+            hovering = $0
+            if !$0 { focused = nil }
+        }
+        .frame(width: 100, alignment: .trailing)
+    }
+
+    @ViewBuilder private func glyph(_ mode: RemoteTrigger) -> some View {
+        switch mode {
+        case .single: Circle().frame(width: 4, height: 4)
+        case .doublePress:
+            HStack(spacing: 4) {
+                Circle().frame(width: 4, height: 4)
+                Circle().frame(width: 4, height: 4)
+            }
+        case .hold: Capsule().frame(width: 13, height: 3)
+        }
     }
 }
 

@@ -120,6 +120,7 @@ final class VoiceController: ObservableObject {
 
     /// Like RemotePilot, a Siri press revives a voice channel that has stopped.
     func siriPressed(routingAudio: Bool) {
+        guard wanted, !stopping else { return }
         capture?.setRouting(routingAudio)
         guard routingAudio, wanted, !enabled, retry == nil else { return }
         resume()
@@ -142,7 +143,11 @@ final class VoiceController: ObservableObject {
     /// prompt by themselves (as RemotePilot's helper does); first installation
     /// waits for the setup page.
     private func resume() {
-        guard wanted, !enabled, !helper.deploying else { return }
+        guard wanted else { return }
+        if stopping { restartWhenStopped = true; return }
+        guard !enabled else { return }
+        if helper.deploying { restartWhenStopped = true; return }
+        restartWhenStopped = false
         helper.refreshStatus()
         switch helper.installation {
         case .installed: failures = 0; start(interactive: false)
@@ -187,7 +192,12 @@ final class VoiceController: ObservableObject {
         state = .authorizing
         activation = Task { [weak self] in
             guard let self else { return }
-            defer { if generation == token { activation = nil } }
+            defer {
+                if generation == token { activation = nil }
+                // An authorization reply can arrive after pause/stop finished.
+                // A quick resume must not be lost while that reply was pending.
+                if Task.isCancelled, restartWhenStopped, wanted, !enabled, !stopping { resume() }
+            }
             do {
                 // Installs components with one administrator prompt when needed.
                 try await helper.ensureReady(allowDeploy: interactive)
@@ -218,7 +228,7 @@ final class VoiceController: ObservableObject {
                 worker.start(descriptor: descriptor)
                 state = .waiting
             } catch {
-                guard generation == token else { return }
+                guard generation == token, !Task.isCancelled, !stopping, wanted else { return }
                 capture?.shutdown()
                 capture = nil
                 state = .failed(error.localizedDescription)
@@ -234,6 +244,10 @@ final class VoiceController: ObservableObject {
         stopping = true
         state = .stopping
         activation?.cancel()
+        // Shut down the local pipe and clear queued PCM immediately rather
+        // than continuing to output audio while the helper acknowledges stop.
+        capture?.setRouting(false)
+        capture?.stop(drain: false, completion: {})
         let token = generation
         Task { [weak self] in
             guard let self else { return }
