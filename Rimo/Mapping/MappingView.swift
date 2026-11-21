@@ -705,11 +705,18 @@ struct ButtonMappingEditor: View {
         stopCapture()
         searchingActions = false
         closeActionConfiguration()
+
+        if let immediate = choice.action {
+            guard model.setAction(immediate, for: button, trigger: selected, sceneID: sceneID) else {
+                // Assignment failed (e.g., action restricted to non-direction keys)
+                // Don't update UI state
+                return
+            }
+        }
+
+        // Only update UI state after successful assignment
         trigger = selected
         rowTriggers[row] = selected
-        if let immediate = choice.action {
-            guard model.setAction(immediate, for: button, trigger: selected, sceneID: sceneID) else { return }
-        }
         kind.wrappedValue = choice.kind
         draftFlags = []
         loadTextDraft()

@@ -426,7 +426,10 @@ final class RimoModel: ObservableObject {
             return
         }
         if edge == .pressed, button == .siri {
-            voice.siriPressed(routingAudio: siriStartsVoiceInput(in: app?.bundleIdentifier))
+            // Only route audio if the mapping that will actually execute requires voice input
+            // Check only the triggers that could actually fire for this press
+            let willRoute = siriWillStartVoiceInput(in: app?.bundleIdentifier)
+            voice.siriPressed(routingAudio: willRoute)
         }
         if let scroll = scrollMode.scroll(for: button) {
             if edge == .pressed { dispatch(.scroll(scroll)) }
@@ -503,8 +506,10 @@ final class RimoModel: ObservableObject {
         }
         let task = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(300))
+            // Check isCancelled immediately after sleep to prevent double-release
             guard !Task.isCancelled, let self,
-                  let pending = self.pendingReleases.removeValue(forKey: button) else { return }
+                  let pending = self.pendingReleases.removeValue(forKey: button),
+                  !pending.task.isCancelled else { return }
             _ = pending.key.post(pressed: false)
         }
         pendingReleases[button] = (key, task)
@@ -513,6 +518,23 @@ final class RimoModel: ObservableObject {
     /// Any trigger of the effective Siri mapping presses a voice key.
     private func siriStartsVoiceInput(in appID: String?) -> Bool {
         RemoteTrigger.allCases.contains { configuration.action(for: .siri, trigger: $0, in: appID)?.startsVoiceInput == true }
+    }
+
+    /// Check if audio routing is actually needed for Siri press.
+    /// Only returns true if the single-tap or imminent action requires voice input.
+    private func siriWillStartVoiceInput(in appID: String?) -> Bool {
+        // Single tap is the most immediate trigger - check it first
+        if let action = configuration.action(for: .siri, trigger: .single, in: appID),
+           action.startsVoiceInput {
+            return true
+        }
+        // Double-tap could fire if single-tap has no mapping
+        if configuration.action(for: .siri, trigger: .single, in: appID) == nil,
+           let action = configuration.action(for: .siri, trigger: .doublePress, in: appID),
+           action.startsVoiceInput {
+            return true
+        }
+        return false
     }
 
     /// The remote's audio capture runs only while some Siri mapping (global or

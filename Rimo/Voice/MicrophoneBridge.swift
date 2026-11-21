@@ -63,11 +63,12 @@ final class MicrophoneOutput {
         guard available else { return kAudioHardwareBadDeviceError }
         var address = property(0x7370636d)
         let referenceData = data as CFData
-        var reference = Unmanaged.passUnretained(referenceData)
-        let result = withExtendedLifetime(referenceData) {
-            AudioObjectSetPropertyData(device, &address, 0, nil,
-                UInt32(MemoryLayout<Unmanaged<CFData>>.size), &reference)
-        }
+        // Use passRetained to safely transfer ownership to Core Audio
+        var reference = Unmanaged.passRetained(referenceData)
+        let result = AudioObjectSetPropertyData(device, &address, 0, nil,
+            UInt32(MemoryLayout<Unmanaged<CFData>>.size), &reference)
+        // Balance the retain with release after the call completes
+        reference.release()
         if result != noErr {
             // Rebind for the next block after coreaudiod or the device restarts.
             // Retrying this block could duplicate a successful partial delivery.

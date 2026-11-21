@@ -46,6 +46,7 @@ enum RemoteAction: Codable, Equatable {
             return lhs.keyCode == rhs.keyCode && lhs.modifiers == rhs.modifiers
                 && (lhs.holdsUntilRelease == true) == (rhs.holdsUntilRelease == true)
                 && lhs.outputModifierCodes == rhs.outputModifierCodes
+                && lhs.label == rhs.label  // Include label in conflict detection
         case (.openApp(let lhs), .openApp(let rhs)): return lhs.bundleIdentifier == rhs.bundleIdentifier
         case (.shortcut(let lhs), .shortcut(let rhs)): return lhs.id == rhs.id
         default: return self == other

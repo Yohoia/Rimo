@@ -253,6 +253,7 @@ final class VoiceController: ObservableObject {
             guard let self else { return }
             await helper.stopCapture()
             guard generation == token else { return }
+            // Process ended after helper cleanup is complete to avoid race with shutdown()
             processEnded(token: token)
         }
     }

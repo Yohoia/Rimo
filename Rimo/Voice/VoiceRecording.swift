@@ -65,6 +65,9 @@ final class VoiceRecording {
                 samples.append(contentsOf: output)
                 onPCM?(output)
                 concealedFrames += 1
+            } else {
+                // PLC (Packet Loss Concealment) failed for this missing frame
+                // Still count it as missing but don't add to concealed count
             }
         }
         let packet = Array(payload[5..<(5 + Int(payload[4]))])

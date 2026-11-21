@@ -140,8 +140,15 @@ struct RimoSettingsView: View {
     @State private var deletingScene: AppSceneMapping?
     @State private var warmScene = false
     @State private var sceneReady = false
+    // Initialize with current state to capture early transitions
     @State private var previousVoiceState: VoiceController.State?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(model: RimoModel) {
+        self.model = model
+        // Capture initial voice state before view appears
+        _previousVoiceState = State(initialValue: model.voice.state)
+    }
 
     private var showing3D: Bool { tab == .mapping && sceneReady }
     private var showingGuide: Bool {

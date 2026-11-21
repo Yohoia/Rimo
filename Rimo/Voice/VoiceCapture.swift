@@ -188,16 +188,19 @@ final class VoiceCapture: @unchecked Sendable {
     }
 
     func stop(drain: Bool, completion: @escaping @Sendable () -> Void) {
-        queue.async { [self] in
-            timer?.cancel()
-            timer = nil
-            if drain { poll() }
-            session.finish()
-            output.reset()
-            if descriptor >= 0 { close(descriptor); descriptor = -1 }
-            fileQueue.async { [self] in
-                queue.async { [self] in
-                    emit()
+        queue.async { [weak self] in
+            guard let self = self else { completion(); return }
+            self.timer?.cancel()
+            self.timer = nil
+            if drain { self.poll() }
+            self.session.finish()
+            self.output.reset()
+            if self.descriptor >= 0 { close(self.descriptor); self.descriptor = -1 }
+            self.fileQueue.async { [weak self] in
+                guard let self = self else { completion(); return }
+                self.queue.async { [weak self] in
+                    guard let self = self else { completion(); return }
+                    self.emit()
                     completion()
                 }
             }
