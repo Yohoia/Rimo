@@ -1,6 +1,16 @@
 <div align="center">
 
-![Rimo Hero](assets/readme/hero.svg)
+<img src="docs/brand/Rimo-lockup.svg" alt="Rimo" width="220"/>
+
+<p align="center">
+  <strong>用 Apple TV 遥控器控制 Mac</strong>
+</p>
+
+<p align="center">
+  自定义按键映射 · 语音输入 · 场景切换
+</p>
+
+<br/>
 
 <p align="center">
   <a href="#特性">特性</a> •
