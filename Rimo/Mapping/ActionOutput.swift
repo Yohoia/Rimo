@@ -67,7 +67,7 @@ enum ActionOutput {
             // Split on Character boundaries so emoji and surrogate pairs stay intact.
             let limit = 4000
             let prefixed = text.value.prefix(limit)
-            let truncated = text.value.count > limit
+            let truncated = prefixed.count < text.value.count
             var chunk = ""
             func send(_ value: String) {
                 let units = Array(value.utf16)

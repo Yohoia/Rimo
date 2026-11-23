@@ -112,6 +112,7 @@ final class VoiceHelperSession: NSObject, VoiceHelperProtocol, @unchecked Sendab
     private var stopping = false
     private var captureToken = ""
     private var cleanupTimeout: DispatchWorkItem?
+    private var cleanupCalled = false
 
     init(server: VoiceHelperServer, connection: NSXPCConnection) {
         self.server = server
@@ -225,7 +226,7 @@ final class VoiceHelperSession: NSObject, VoiceHelperProtocol, @unchecked Sendab
     private func ended(_ process: Process) {
         server.queue.async { [self] in
             // A queued exit from an earlier capture must not clear a new one.
-            guard task === process else { return }
+            guard task === process, !cleanupCalled else { return }
             try? errors?.close()
             let data = folder.flatMap { try? Data(contentsOf: $0.appendingPathComponent("error.txt")) } ?? Data()
             let reason = stopping ? "" : String(data: data.prefix(2048), encoding: .utf8) ?? "蓝牙采集已结束。"
@@ -237,6 +238,9 @@ final class VoiceHelperSession: NSObject, VoiceHelperProtocol, @unchecked Sendab
     }
 
     private func cleanup() {
+        // Prevent double cleanup from timeout and terminationHandler
+        guard !cleanupCalled else { return }
+        cleanupCalled = true
         cleanupTimeout?.cancel()
         cleanupTimeout = nil
         // Read task into local to avoid race with terminationHandler

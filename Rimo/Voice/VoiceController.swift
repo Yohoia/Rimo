@@ -42,7 +42,8 @@ final class VoiceController: ObservableObject {
     private var stopping = false
     private var captureFailure: String?
     /// Guards processEnded against double-invocation (helper callback + capture failure arriving together).
-    private var processingEnded = false
+    /// Uses generation tokens to track which captures have been processed.
+    private var processedGenerations: Set<UUID> = []
     private var helperChanges: AnyCancellable?
     private var retry: Task<Void, Never>?
     private var failures = 0
@@ -266,7 +267,8 @@ final class VoiceController: ObservableObject {
         retry?.cancel()
         retry = nil
         stopping = true
-        processingEnded = true  // Prevent processEnded from running during shutdown
+        // Add current generation to processed set to prevent processEnded from running
+        processedGenerations.insert(generation)
         capture?.shutdown()
         capture = nil
         helper.shutdown()
@@ -291,8 +293,8 @@ final class VoiceController: ObservableObject {
 
     private func processEnded(token: UUID) {
         guard generation == token else { return }
-        guard !processingEnded else { return }
-        processingEnded = true
+        guard !processedGenerations.contains(token) else { return }
+        processedGenerations.insert(token)
         let completion: @Sendable () -> Void = { [weak self] in
             Task { @MainActor in
                 guard let self, self.generation == token else { return }
@@ -303,7 +305,8 @@ final class VoiceController: ObservableObject {
                 self.activation = nil
                 self.generation = UUID()
                 self.stopping = false
-                self.processingEnded = false
+                // Clean up old processed generations to prevent memory growth
+                self.processedGenerations.remove(token)
                 self.level = 0
                 if let failure = self.captureFailure { self.state = .failed(failure) }
                 else if wasStopping { self.state = .off }

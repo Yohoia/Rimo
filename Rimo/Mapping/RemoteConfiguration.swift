@@ -579,17 +579,17 @@ enum ShortcutsCLI {
         process.standardError = pipe
         process.standardInput = FileHandle.nullDevice
         try process.run()
+        // Close the write end immediately after process starts so the read end
+        // will get EOF when the process exits, preventing readDataToEndOfFile() from blocking.
+        do {
+            try pipe.fileHandleForWriting.close()
+        } catch {
+            log.warning("Failed to close pipe write end: \(error.localizedDescription, privacy: .public)")
+        }
         let timeout = DispatchWorkItem { if process.isRunning { process.terminate() } }
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + (discardOutput ? 60 : 15), execute: timeout)
         defer {
             timeout.cancel()
-            // Always close the pipe's write end so readDataToEndOfFile() never
-            // blocks indefinitely when the process exits without closing it.
-            do {
-                try pipe.fileHandleForWriting.close()
-            } catch {
-                log.warning("Failed to close pipe write end: \(error.localizedDescription, privacy: .public)")
-            }
         }
         // Drain before waiting so a large shortcut library cannot fill the pipe.
         let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)

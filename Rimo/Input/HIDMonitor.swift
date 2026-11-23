@@ -176,8 +176,10 @@ final class HIDMonitor {
     func stop() {
         guard let manager else { return }
         IOHIDManagerUnscheduleFromRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
+        // Copy device references to avoid concurrent modification during iteration
+        let devicesToCleanup = Array(deviceRefs)
         // Unregister callbacks before deallocating buffers to prevent use-after-free
-        for (deviceID, device) in deviceRefs {
+        for (deviceID, device) in devicesToCleanup {
             if let buffer = deviceBuffers[deviceID] {
                 IOHIDDeviceRegisterInputReportCallback(device, buffer, 0, nil, nil)
             }
@@ -234,8 +236,11 @@ final class HIDMonitor {
         devices.remove(deviceID)
         buttons.remove(device: deviceID)
         // Unregister callback before deallocating buffer
+        // This is called on MainActor so the unregister is synchronous
         if let buffer = deviceBuffers[deviceID] {
             IOHIDDeviceRegisterInputReportCallback(device, buffer, 0, nil, nil)
+            // Add a small delay to ensure IOKit completes callback dispatch
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.001))
         }
         // Clean up buffer and device reference
         if let buffer = deviceBuffers.removeValue(forKey: deviceID) {
