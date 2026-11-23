@@ -111,6 +111,7 @@ final class VoiceHelperSession: NSObject, VoiceHelperProtocol, @unchecked Sendab
     private var errors: FileHandle?
     private var stopping = false
     private var captureToken = ""
+    private var cleanupTimeout: DispatchWorkItem?
 
     init(server: VoiceHelperServer, connection: NSXPCConnection) {
         self.server = server
@@ -145,7 +146,11 @@ final class VoiceHelperSession: NSObject, VoiceHelperProtocol, @unchecked Sendab
                 // Validate Apple's binary separately before privileged execution.
                 _ = try server.application.run(URL(fileURLWithPath: "/usr/bin/codesign"),
                     ["--verify", "--strict", "-R=anchor apple", cli.path])
+                #if HELPER_TESTING
+                let root = server.application.directory.appendingPathComponent("Rimo-voice-\(UUID().uuidString)")
+                #else
                 let root = URL(fileURLWithPath: "/private/var/run/Rimo-voice-\(UUID().uuidString)")
+                #endif
                 try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false,
                     attributes: [.posixPermissions: 0o700])
                 folder = root
@@ -163,7 +168,23 @@ final class VoiceHelperSession: NSObject, VoiceHelperProtocol, @unchecked Sendab
                 process.arguments = ["convert", "--output", fifo]
                 process.standardOutput = FileHandle.nullDevice
                 process.standardError = errors
-                process.terminationHandler = { [weak self] _ in self?.ended() }
+                // The XPC connection can release its session before the child
+                // exits. Keep it alive until cleanup releases capture ownership.
+                // Add a timeout to prevent leaking sessions if the process hangs.
+                process.terminationHandler = { [self] process in ended(process) }
+                let timeout = DispatchWorkItem { [weak self] in
+                    guard let self else { return }
+                    server.queue.async {
+                        guard self.task === process, !self.stopping else { return }
+                        // Force cleanup if process never exits within reasonable time (5 minutes)
+                        process.terminate()
+                        Thread.sleep(forTimeInterval: 1.0)
+                        if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                        self.ended(process)
+                    }
+                }
+                self.cleanupTimeout = timeout
+                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 300, execute: timeout)
                 self.errors = errors
                 self.task = process
                 stopping = false
@@ -201,8 +222,10 @@ final class VoiceHelperSession: NSObject, VoiceHelperProtocol, @unchecked Sendab
         }
     }
 
-    private func ended() {
+    private func ended(_ process: Process) {
         server.queue.async { [self] in
+            // A queued exit from an earlier capture must not clear a new one.
+            guard task === process else { return }
             try? errors?.close()
             let data = folder.flatMap { try? Data(contentsOf: $0.appendingPathComponent("error.txt")) } ?? Data()
             let reason = stopping ? "" : String(data: data.prefix(2048), encoding: .utf8) ?? "蓝牙采集已结束。"
@@ -214,7 +237,12 @@ final class VoiceHelperSession: NSObject, VoiceHelperProtocol, @unchecked Sendab
     }
 
     private func cleanup() {
+        cleanupTimeout?.cancel()
+        cleanupTimeout = nil
+        // Read task into local to avoid race with terminationHandler
+        let currentTask = task
         task = nil
+        currentTask?.terminationHandler = nil
         try? errors?.close()
         errors = nil
         if let folder { try? FileManager.default.removeItem(at: folder) }

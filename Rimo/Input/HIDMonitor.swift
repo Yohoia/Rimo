@@ -26,6 +26,8 @@ final class HIDMonitor {
     private var manager: IOHIDManager?
     private var devices: Set<UInt> = []
     private var buttons = RemoteButtonState()
+    private var deviceBuffers: [UInt: UnsafeMutablePointer<UInt8>] = [:]
+    private var deviceRefs: [UInt: IOHIDDevice] = [:]
 
     // Enumerating registry properties needs no input-monitoring permission.
     // Opening the manager for event callbacks does; keep these paths separate.
@@ -174,8 +176,20 @@ final class HIDMonitor {
     func stop() {
         guard let manager else { return }
         IOHIDManagerUnscheduleFromRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
+        // Unregister callbacks before deallocating buffers to prevent use-after-free
+        for (deviceID, device) in deviceRefs {
+            if let buffer = deviceBuffers[deviceID] {
+                IOHIDDeviceRegisterInputReportCallback(device, buffer, 0, nil, nil)
+            }
+        }
         IOHIDManagerClose(manager, 0)
         self.manager = nil
+        // Clean up allocated buffers after callbacks are unregistered
+        for buffer in deviceBuffers.values {
+            buffer.deallocate()
+        }
+        deviceBuffers.removeAll()
+        deviceRefs.removeAll()
         devices.removeAll()
         buttons.reset()
         onStatus?(.stopped)
@@ -186,7 +200,9 @@ final class HIDMonitor {
     }
 
     private func attach(_ device: IOHIDDevice) {
-        guard devices.insert(id(of: device)).inserted else { return }
+        let deviceID = id(of: device)
+        guard devices.insert(deviceID).inserted else { return }
+        deviceRefs[deviceID] = device
         let vendor = IOHIDDeviceGetProperty(device, kIOHIDVendorIDKey as CFString) as? Int ?? 0
         let product = IOHIDDeviceGetProperty(device, kIOHIDProductIDKey as CFString) as? Int ?? 0
         if let address = IOHIDDeviceGetProperty(device, kIOHIDSerialNumberKey as CFString) as? String,
@@ -194,9 +210,10 @@ final class HIDMonitor {
             onRemoteAddress?(address)
         }
 
-        // Enable report callback for this device
+        // Enable report callback for this device - allocate buffer and track it for cleanup
         let reportSize = 256
         let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: reportSize)
+        deviceBuffers[deviceID] = buffer
         let context = Unmanaged.passUnretained(self).toOpaque()
         IOHIDDeviceRegisterInputReportCallback(device, buffer, reportSize, { context, result, sender, _, reportID, bytes, length in
             guard let context, let sender, result == kIOReturnSuccess else { return }
@@ -216,6 +233,15 @@ final class HIDMonitor {
         let deviceID = id(of: device)
         devices.remove(deviceID)
         buttons.remove(device: deviceID)
+        // Unregister callback before deallocating buffer
+        if let buffer = deviceBuffers[deviceID] {
+            IOHIDDeviceRegisterInputReportCallback(device, buffer, 0, nil, nil)
+        }
+        // Clean up buffer and device reference
+        if let buffer = deviceBuffers.removeValue(forKey: deviceID) {
+            buffer.deallocate()
+        }
+        deviceRefs.removeValue(forKey: deviceID)
         onDeviceRemoved?()
         onStatus?(devices.isEmpty ? .waiting : .connected)
     }

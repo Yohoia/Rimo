@@ -1,56 +1,47 @@
 import AppKit
 import SwiftUI
 
-/// Shown on the Siri key when it presses an input method's voice key. As in
-/// Voxa ("press the key + supply the audio"), Rimo only presses the key; the
-/// input method listens to Rimo Remote Microphone and does the recognition.
+/// Component installation status alongside the device's permission settings.
 struct VoiceKeyStatus: View {
     @ObservedObject var voice: VoiceController
     @ObservedObject var helper: VoiceHelperClient
-    var horizontalInset: CGFloat = 32
     @State private var working = false
     @State private var message: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("遥控器麦克风", systemImage: "mic.fill")
-                .font(.system(size: 14, weight: .semibold))
-            Text("按住 Siri 键时，声音会送到 Rimo Remote Microphone。请在输入法的设置里把麦克风选为它。")
-                .font(RimoStyle.label)
-                .foregroundStyle(RimoStyle.muted)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack(alignment: .top, spacing: 8) {
-                if working || helper.deploying || voice.state == .authorizing {
-                    ProgressView().controlSize(.small)
+        SettingsRow("遥控器麦克风", description: message ?? description) {
+            if helper.installation == .installed, !busy {
+                SettingsControl(title: "已就绪", symbol: "checkmark")
+                    .accessibilityLabel("遥控器麦克风，语音组件已就绪")
+            } else {
+                Button(action: install) {
+                    SettingsControl(title: statusTitle, symbol: "arrow.down", isLoading: busy)
                 }
-                Text(message ?? statusText)
-                    .font(RimoStyle.label)
-                    .foregroundStyle(RimoStyle.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if voice.state == .recording || voice.state == .draining {
-                ProgressView(value: voice.level)
-                    .tint(RimoStyle.assignmentAccent)
-                    .accessibilityLabel("遥控器收音音量")
-            }
-            if !voice.installed, helper.installation == .missing {
-                Button("安装语音组件…") { install() }
-                    .buttonStyle(RimoButtonStyle(primary: true))
-                    .disabled(working || helper.deploying)
+                .disabled(busy || unavailable)
+                .accessibilityLabel("遥控器麦克风，\(statusTitle)，\(helper.installation == .outdated ? "更新" : "安装")语音组件")
             }
         }
-        .padding(.horizontal, horizontalInset)
-        .padding(.vertical, 14)
         .onAppear { helper.refreshStatus() }
     }
 
-    private var statusText: String {
-        if working || helper.deploying { return "正在安装语音组件…" }
+    private var busy: Bool { working || helper.deploying }
+
+    private var unavailable: Bool {
+        if case .unavailable = helper.installation { return true }
+        return false
+    }
+
+    private var statusTitle: String {
+        if busy { return "安装中…" }
+        return helper.installation == .outdated ? "待更新" : "待安装"
+    }
+
+    private var description: String {
+        if busy { return "正在安装语音组件，请完成系统授权。" }
         if case .unavailable(let reason) = helper.installation { return reason }
-        if !voice.installed { return "语音组件未安装，需要输入一次 Mac 登录密码。" }
-        if case .failed(let reason) = voice.state { return reason }
-        if voice.state == .ready { return "已就绪，单次最长约 60 秒。" }
-        return voice.state.title
+        if helper.installation == .missing { return "需要安装语音组件，安装时需输入一次 Mac 登录密码。" }
+        if helper.installation == .outdated { return "需要更新语音组件，更新时需输入一次 Mac 登录密码。" }
+        return "按住 Siri 键说话，并在输入法中选择 Rimo Remote Microphone。"
     }
 
     private func install() {

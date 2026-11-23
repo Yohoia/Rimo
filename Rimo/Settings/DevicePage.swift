@@ -69,14 +69,21 @@ struct SettingsRow<Control: View>: View {
 struct SettingsControl: View {
     let title: String
     var symbol = "chevron.down"
+    var isLoading = false
 
     var body: some View {
         HStack(spacing: 18) {
             Text(title)
                 .lineLimit(1)
-            Image(systemName: symbol)
-                .font(.system(size: 11, weight: .semibold))
-                .accessibilityHidden(true)
+            if isLoading {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityHidden(true)
+            } else {
+                Image(systemName: symbol)
+                    .font(.system(size: 11, weight: .semibold))
+                    .accessibilityHidden(true)
+            }
         }
         .font(SettingsAppearance.body)
         .foregroundStyle(.primary)
@@ -120,9 +127,9 @@ struct DevicePage: View {
                         ForEach(RimoPermission.allCases) { permission in
                             permissionRow(permission)
                         }
-                    }
 
-                    VoiceKeyStatus(voice: model.voice, helper: model.voice.helper, horizontalInset: 0)
+                        VoiceKeyStatus(voice: model.voice, helper: model.voice.helper)
+                    }
                 }
                 .frame(width: min(680, geometry.size.width * 0.7 - 72), alignment: .leading)
                 .padding(.top, 54)

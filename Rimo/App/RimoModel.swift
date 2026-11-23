@@ -339,8 +339,10 @@ final class RimoModel: ObservableObject {
         edit(&next)
         do {
             defaults.set(try JSONEncoder().encode(next), forKey: storageKey)
-            cancelPendingPresses()
             configuration = next
+            // Cancel after updating so handle() never reads old configuration
+            // after pending presses have been cancelled.
+            cancelPendingPresses()
             configurationError = nil
             syncVoice()
             return true

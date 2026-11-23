@@ -65,6 +65,9 @@ enum ActionOutput {
             }
         case .text(let text):
             // Split on Character boundaries so emoji and surrogate pairs stay intact.
+            let limit = 4000
+            let prefixed = text.value.prefix(limit)
+            let truncated = text.value.count > limit
             var chunk = ""
             func send(_ value: String) {
                 let units = Array(value.utf16)
@@ -76,13 +79,16 @@ enum ActionOutput {
                     event?.post(tap: .cghidEventTap)
                 }
             }
-            for character in text.value.prefix(4000) {
+            for character in prefixed {
                 chunk.append(character)
                 if chunk.utf16.count >= 20 { send(chunk); chunk = "" }
             }
             if !chunk.isEmpty { send(chunk) }
             if text.appendReturn {
                 _ = KeyboardShortcut(option: KeyboardShortcut.navigationKeys[0], flags: []).post()
+            }
+            if truncated {
+                throw OutputError.message("预设文本超过 \(limit) 字符，已截断输出。")
             }
         case .shortcut, .openApp: break
         }

@@ -41,6 +41,8 @@ final class VoiceController: ObservableObject {
     private var generation = UUID()
     private var stopping = false
     private var captureFailure: String?
+    /// Guards processEnded against double-invocation (helper callback + capture failure arriving together).
+    private var processingEnded = false
     private var helperChanges: AnyCancellable?
     private var retry: Task<Void, Never>?
     private var failures = 0
@@ -260,10 +262,14 @@ final class VoiceController: ObservableObject {
 
     func shutdown() {
         activation?.cancel()
+        activation = nil
         retry?.cancel()
+        retry = nil
         stopping = true
-        helper.shutdown()
+        processingEnded = true  // Prevent processEnded from running during shutdown
         capture?.shutdown()
+        capture = nil
+        helper.shutdown()
     }
 
     private func update(_ snapshot: VoiceCapture.Snapshot, token: UUID) {
@@ -285,6 +291,8 @@ final class VoiceController: ObservableObject {
 
     private func processEnded(token: UUID) {
         guard generation == token else { return }
+        guard !processingEnded else { return }
+        processingEnded = true
         let completion: @Sendable () -> Void = { [weak self] in
             Task { @MainActor in
                 guard let self, self.generation == token else { return }
@@ -295,6 +303,7 @@ final class VoiceController: ObservableObject {
                 self.activation = nil
                 self.generation = UUID()
                 self.stopping = false
+                self.processingEnded = false
                 self.level = 0
                 if let failure = self.captureFailure { self.state = .failed(failure) }
                 else if wasStopping { self.state = .off }

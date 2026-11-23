@@ -1,6 +1,7 @@
 import AppKit
 import Carbon.HIToolbox
 import Foundation
+import os
 
 struct SystemShortcut: Codable, Hashable, Identifiable {
     let id: UUID
@@ -265,6 +266,8 @@ struct ButtonMappings: Codable, Equatable {
     var actions: [String: RemoteAction] = [:]
     private var disabled: Set<String> = []
 
+    private static let log = Logger(subsystem: "cn.yohoia.rimo", category: "configuration")
+
     init() {}
 
     private enum CodingKeys: String, CodingKey { case actions, disabled }
@@ -280,7 +283,14 @@ struct ButtonMappings: Codable, Equatable {
 
     private struct OptionalAction: Decodable {
         let action: RemoteAction?
-        init(from decoder: Decoder) throws { action = try? RemoteAction(from: decoder) }
+        init(from decoder: Decoder) throws {
+            do {
+                action = try RemoteAction(from: decoder)
+            } catch {
+                action = nil
+                ButtonMappings.log.warning("Skipped undecodable action: \(error.localizedDescription, privacy: .public)")
+            }
+        }
     }
 
     subscript(_ button: RemoteButton, _ trigger: RemoteTrigger = .single) -> RemoteAction? {
@@ -540,6 +550,8 @@ struct RemoteConfiguration: Codable, Equatable {
 }
 
 enum ShortcutsCLI {
+    private static let log = Logger(subsystem: "cn.yohoia.rimo", category: "shortcuts")
+
     static func list() async throws -> [SystemShortcut] {
         try await Task.detached(priority: .utility) {
             let output = try execute(["list", "--show-identifiers"])
@@ -569,7 +581,16 @@ enum ShortcutsCLI {
         try process.run()
         let timeout = DispatchWorkItem { if process.isRunning { process.terminate() } }
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + (discardOutput ? 60 : 15), execute: timeout)
-        defer { timeout.cancel() }
+        defer {
+            timeout.cancel()
+            // Always close the pipe's write end so readDataToEndOfFile() never
+            // blocks indefinitely when the process exits without closing it.
+            do {
+                try pipe.fileHandleForWriting.close()
+            } catch {
+                log.warning("Failed to close pipe write end: \(error.localizedDescription, privacy: .public)")
+            }
+        }
         // Drain before waiting so a large shortcut library cannot fill the pipe.
         let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         process.waitUntilExit()
