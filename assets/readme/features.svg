@@ -1,0 +1,109 @@
+<svg viewBox="0 0 1200 240" xmlns="http://www.w3.org/2000/svg" width="100%">
+  <defs>
+    <linearGradient id="feature-bg-1" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#007AFF;stop-opacity:0.08"/>
+      <stop offset="100%" style="stop-color:#007AFF;stop-opacity:0.02"/>
+    </linearGradient>
+    <linearGradient id="feature-bg-2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#34C759;stop-opacity:0.08"/>
+      <stop offset="100%" style="stop-color:#34C759;stop-opacity:0.02"/>
+    </linearGradient>
+    <linearGradient id="feature-bg-3" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#FF9500;stop-opacity:0.08"/>
+      <stop offset="100%" style="stop-color:#FF9500;stop-opacity:0.02"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Feature 1: Button Mapping -->
+  <g transform="translate(0, 0)">
+    <rect x="0" y="0" width="380" height="220" rx="12" fill="url(#feature-bg-1)"/>
+
+    <!-- Icon: Keyboard -->
+    <g transform="translate(40, 40)">
+      <rect x="0" y="0" width="60" height="60" rx="8" fill="#007AFF" opacity="0.1"/>
+      <rect x="12" y="15" width="10" height="10" rx="2" fill="#007AFF"/>
+      <rect x="26" y="15" width="10" height="10" rx="2" fill="#007AFF"/>
+      <rect x="40" y="15" width="10" height="10" rx="2" fill="#007AFF"/>
+      <rect x="12" y="30" width="10" height="10" rx="2" fill="#007AFF"/>
+      <rect x="26" y="30" width="22" height="10" rx="2" fill="#007AFF" opacity="0.6"/>
+    </g>
+
+    <text x="40" y="135" font-family="-apple-system, SF Pro Display, system-ui" font-size="20" font-weight="600" fill="#000">
+      按键映射
+    </text>
+    <text x="40" y="160" font-family="-apple-system, SF Pro Text, system-ui" font-size="14" fill="#666" letter-spacing="-0.2">
+      单击 · 双击 · 长按
+    </text>
+    <text x="40" y="182" font-family="-apple-system, SF Pro Text, system-ui" font-size="13" fill="#8E8E93">
+      支持快捷键、鼠标、滚动
+    </text>
+    <text x="40" y="200" font-family="-apple-system, SF Pro Text, system-ui" font-size="13" fill="#8E8E93">
+      媒体控制和系统操作
+    </text>
+  </g>
+
+  <!-- Feature 2: Scene Switching -->
+  <g transform="translate(410, 0)">
+    <rect x="0" y="0" width="380" height="220" rx="12" fill="url(#feature-bg-2)"/>
+
+    <!-- Icon: Apps grid -->
+    <g transform="translate(40, 40)">
+      <rect x="0" y="0" width="60" height="60" rx="8" fill="#34C759" opacity="0.1"/>
+      <rect x="10" y="10" width="12" height="12" rx="2" fill="#34C759"/>
+      <rect x="26" y="10" width="12" height="12" rx="2" fill="#34C759" opacity="0.6"/>
+      <rect x="42" y="10" width="12" height="12" rx="2" fill="#34C759" opacity="0.4"/>
+      <rect x="10" y="26" width="12" height="12" rx="2" fill="#34C759" opacity="0.6"/>
+      <rect x="26" y="26" width="12" height="12" rx="2" fill="#34C759"/>
+      <rect x="10" y="42" width="12" height="12" rx="2" fill="#34C759" opacity="0.4"/>
+    </g>
+
+    <text x="40" y="135" font-family="-apple-system, SF Pro Display, system-ui" font-size="20" font-weight="600" fill="#000">
+      场景切换
+    </text>
+    <text x="40" y="160" font-family="-apple-system, SF Pro Text, system-ui" font-size="14" fill="#666" letter-spacing="-0.2">
+      App 自动识别
+    </text>
+    <text x="40" y="182" font-family="-apple-system, SF Pro Text, system-ui" font-size="13" fill="#8E8E93">
+      为不同应用设置专属映射
+    </text>
+    <text x="40" y="200" font-family="-apple-system, SF Pro Text, system-ui" font-size="13" fill="#8E8E93">
+      内置演示、阅读、视频预设
+    </text>
+  </g>
+
+  <!-- Feature 3: Voice Input -->
+  <g transform="translate(820, 0)">
+    <rect x="0" y="0" width="380" height="220" rx="12" fill="url(#feature-bg-3)"/>
+
+    <!-- Icon: Microphone -->
+    <g transform="translate(40, 40)">
+      <rect x="0" y="0" width="60" height="60" rx="8" fill="#FF9500" opacity="0.1"/>
+      <rect x="22" y="12" width="16" height="24" rx="8" fill="#FF9500"/>
+      <path d="M 18 32 Q 18 40 30 40 Q 42 40 42 32" stroke="#FF9500" stroke-width="2" fill="none"/>
+      <line x1="30" y1="40" x2="30" y2="48" stroke="#FF9500" stroke-width="2"/>
+      <line x1="24" y1="48" x2="36" y2="48" stroke="#FF9500" stroke-width="2"/>
+    </g>
+
+    <text x="40" y="135" font-family="-apple-system, SF Pro Display, system-ui" font-size="20" font-weight="600" fill="#000">
+      遥控器语音
+    </text>
+    <text x="40" y="160" font-family="-apple-system, SF Pro Text, system-ui" font-size="14" fill="#666" letter-spacing="-0.2">
+      实验性功能
+    </text>
+    <text x="40" y="182" font-family="-apple-system, SF Pro Text, system-ui" font-size="13" fill="#8E8E93">
+      按住 Siri 键说话
+    </text>
+    <text x="40" y="200" font-family="-apple-system, SF Pro Text, system-ui" font-size="13" fill="#8E8E93">
+      虚拟麦克风输出到输入法
+    </text>
+  </g>
+
+  <!-- Dark mode support -->
+  <style>
+    @media (prefers-color-scheme: dark) {
+      text[fill="#000"] { fill: #FFFFFF; }
+      text[fill="#666"] { fill: #A0A0A0; }
+      text[fill="#8E8E93"] { fill: #666666; }
+    }
+  </style>
+</svg>

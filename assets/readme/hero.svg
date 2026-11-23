@@ -1,0 +1,105 @@
+<svg viewBox="0 0 1200 400" xmlns="http://www.w3.org/2000/svg" width="100%">
+  <defs>
+    <linearGradient id="bg-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#007AFF;stop-opacity:0.05"/>
+      <stop offset="100%" style="stop-color:#34C759;stop-opacity:0.03"/>
+    </linearGradient>
+
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Remote device icon -->
+    <g id="remote-icon">
+      <!-- Remote body -->
+      <rect x="0" y="0" width="80" height="200" rx="40" fill="#1C1C1E" opacity="0.9"/>
+
+      <!-- Touch surface -->
+      <circle cx="40" cy="60" r="28" fill="#2C2C2E" stroke="#007AFF" stroke-width="2" opacity="0.8"/>
+
+      <!-- Play/Pause button -->
+      <circle cx="40" cy="130" r="12" fill="#007AFF" opacity="0.6"/>
+
+      <!-- Siri button (voice indicator) -->
+      <circle cx="40" cy="170" r="8" fill="#34C759" opacity="0.8"/>
+      <circle cx="40" cy="170" r="12" fill="#34C759" opacity="0.3"/>
+    </g>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="400" fill="url(#bg-gradient)"/>
+
+  <!-- Left: Title and tagline -->
+  <g transform="translate(80, 120)">
+    <!-- Rimo logo text -->
+    <text x="0" y="0" font-family="-apple-system, SF Pro Display, Geist, system-ui" font-size="72" font-weight="700" fill="#000" letter-spacing="-2">
+      Rimo
+    </text>
+
+    <!-- Tagline -->
+    <text x="0" y="60" font-family="-apple-system, SF Pro Text, Geist, system-ui" font-size="22" font-weight="400" fill="#666" letter-spacing="-0.5">
+      用 Apple TV 遥控器控制 Mac
+    </text>
+
+    <text x="0" y="90" font-family="-apple-system, SF Pro Text, Geist, system-ui" font-size="16" font-weight="400" fill="#8E8E93">
+      自定义按键映射 · 语音输入 · 场景切换
+    </text>
+
+    <!-- Status badges -->
+    <g transform="translate(0, 125)">
+      <!-- macOS badge -->
+      <rect x="0" y="0" width="80" height="28" rx="14" fill="#007AFF" opacity="0.1"/>
+      <text x="40" y="19" font-family="-apple-system, SF Pro Text, system-ui" font-size="13" font-weight="600" fill="#007AFF" text-anchor="middle">
+        macOS
+      </text>
+
+      <!-- Swift badge -->
+      <rect x="90" y="0" width="70" height="28" rx="14" fill="#FF9500" opacity="0.1"/>
+      <text x="125" y="19" font-family="-apple-system, SF Pro Text, system-ui" font-size="13" font-weight="600" fill="#FF9500" text-anchor="middle">
+        Swift
+      </text>
+
+      <!-- A2540 badge -->
+      <rect x="170" y="0" width="80" height="28" rx="14" fill="#34C759" opacity="0.1"/>
+      <text x="210" y="19" font-family="-apple-system, SF Pro Text, system-ui" font-size="13" font-weight="600" fill="#34C759" text-anchor="middle">
+        A2540
+      </text>
+    </g>
+  </g>
+
+  <!-- Right: Remote device illustration -->
+  <g transform="translate(850, 100)">
+    <use href="#remote-icon" transform="scale(1.5)"/>
+
+    <!-- Connection indicator -->
+    <g transform="translate(140, 100)">
+      <!-- Bluetooth icon -->
+      <circle cx="0" cy="0" r="20" fill="#007AFF" opacity="0.1"/>
+      <path d="M -6 -8 L 6 0 L -6 8 M -6 -8 L -6 8" stroke="#007AFF" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M 0 -8 L 6 0 L 0 8" stroke="#007AFF" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+
+    <!-- Mac icon (simplified) -->
+    <g transform="translate(220, 90)">
+      <rect x="0" y="0" width="60" height="45" rx="4" fill="#1C1C1E" opacity="0.9"/>
+      <rect x="5" y="5" width="50" height="30" rx="2" fill="#007AFF" opacity="0.2"/>
+      <rect x="20" y="45" width="20" height="4" rx="2" fill="#1C1C1E" opacity="0.6"/>
+    </g>
+
+    <!-- Connection line -->
+    <line x1="145" y1="100" x2="215" y2="110" stroke="#007AFF" stroke-width="2" stroke-dasharray="5,5" opacity="0.4"/>
+  </g>
+
+  <!-- Dark mode variant (hidden by default, shown with prefers-color-scheme) -->
+  <style>
+    @media (prefers-color-scheme: dark) {
+      text[fill="#000"] { fill: #FFFFFF; }
+      text[fill="#666"] { fill: #A0A0A0; }
+      rect[fill="#FFFFFF"] { fill: #000000; }
+    }
+  </style>
+</svg>
