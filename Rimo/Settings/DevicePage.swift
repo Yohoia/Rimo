@@ -237,7 +237,7 @@ struct PermissionOnboardingView: View {
             // MainMenu.nib uses a 1200 × 680 canvas, a 188-point welcome image,
             // title top 382, description top 430 and a 40-point primary button.
             VStack(spacing: 0) {
-                Image(nsImage: NSImage(named: NSImage.applicationIconName) ?? NSImage())
+                Image("RimoBrandIcon")
                     .resizable()
                     .scaledToFit()
                     .frame(width: 188, height: 188)

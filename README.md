@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/brand/Rimo-lockup.svg" alt="Rimo" width="220"/>
+<img src="Rimo/Assets.xcassets/RimoBrandLockup.imageset/Rimo-lockup.svg" alt="Rimo" width="220"/>
 
 <p align="center">
   <strong>用 Apple TV 遥控器控制 Mac</strong>

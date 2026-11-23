@@ -353,15 +353,17 @@ struct RimoSettingsView: View {
                 selected = nil
                 tab = .home
             } label: {
-                Text("欢迎回来")
-                    .font(RimoStyle.heading)
-                    .tracking(RimoStyle.headingTracking)
+                Image("RimoBrandLockup")
+                    .renderingMode(.template)
+                    .resizable()
+                    .scaledToFit()
                     .foregroundStyle(RimoStyle.ink)
-                    .fixedSize()
+                    .frame(width: 170, height: 36)
                     .frame(minHeight: 44)
+                    .accessibilityHidden(true)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("欢迎回来，返回首页")
+            .accessibilityLabel("Rimo，返回首页")
             .help("返回遥控器首页")
 
             Spacer(minLength: 24)
