@@ -29,6 +29,10 @@ final class HIDMonitor {
     private var deviceBuffers: [UInt: UnsafeMutablePointer<UInt8>] = [:]
     private var deviceRefs: [UInt: IOHIDDevice] = [:]
 
+    // Battery level cache to reduce IOKit queries
+    private static var cachedBattery: (level: Int?, timestamp: Date)?
+    private static let batteryCacheInterval: TimeInterval = 30 // 30 seconds
+
     // Enumerating registry properties needs no input-monitoring permission.
     // Opening the manager for event callbacks does; keep these paths separate.
     static func connectedRemoteAddresses() -> Set<String> {
@@ -46,19 +50,34 @@ final class HIDMonitor {
     }
 
     static func batteryPercentage() -> Int? {
-        if let percent = accessoryBatteryPercentage() { return percent }
-        let probe = IOHIDManagerCreate(kCFAllocatorDefault, 0)
-        IOHIDManagerSetDeviceMatchingMultiple(probe, A2540Input.vendorIDs.map {
-            [kIOHIDVendorIDKey: $0, kIOHIDProductIDKey: A2540Input.productID]
-        } as CFArray)
-        let devices = IOHIDManagerCopyDevices(probe) as? Set<IOHIDDevice> ?? []
-        let values = Set(devices.compactMap { device -> Int? in
-            guard let value = IOHIDDeviceGetProperty(device, "BatteryPercent" as CFString) as? Int,
-                  (0...100).contains(value) else { return nil }
-            return value
-        })
-        // Avoid showing another remote's level when multiple physical devices are present.
-        return values.count == 1 ? values.first : nil
+        // Return cached value if still valid
+        if let cached = cachedBattery,
+           Date().timeIntervalSince(cached.timestamp) < batteryCacheInterval {
+            return cached.level
+        }
+
+        // Query fresh battery level
+        let level: Int?
+        if let percent = accessoryBatteryPercentage() {
+            level = percent
+        } else {
+            let probe = IOHIDManagerCreate(kCFAllocatorDefault, 0)
+            IOHIDManagerSetDeviceMatchingMultiple(probe, A2540Input.vendorIDs.map {
+                [kIOHIDVendorIDKey: $0, kIOHIDProductIDKey: A2540Input.productID]
+            } as CFArray)
+            let devices = IOHIDManagerCopyDevices(probe) as? Set<IOHIDDevice> ?? []
+            let values = Set(devices.compactMap { device -> Int? in
+                guard let value = IOHIDDeviceGetProperty(device, "BatteryPercent" as CFString) as? Int,
+                      (0...100).contains(value) else { return nil }
+                return value
+            })
+            // Avoid showing another remote's level when multiple physical devices are present.
+            level = values.count == 1 ? values.first : nil
+        }
+
+        // Update cache
+        cachedBattery = (level, Date())
+        return level
     }
 
     static func deviceInformation(address: String) -> DeviceInformation? {
